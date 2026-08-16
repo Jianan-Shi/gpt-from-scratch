@@ -3,3 +3,5 @@ __pycache__/
 *.pth
 data/
 .ipynb_checkpoints/
+__pycache__/
+*.pyc
