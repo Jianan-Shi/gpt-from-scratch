@@ -3,8 +3,9 @@ import math
 import torch
 import torch.nn.functional as F
 
-from bigram import (VOCAB_SIZE, build_dataset, build_vocab, fit_counting,
-                    fit_neural, load_words, nll_counting, nll_neural)
+from bigram import (build_dataset, fit_counting, fit_neural, nll_counting,
+                    nll_neural)
+from nnzh.data import VOCAB_SIZE, build_vocab, load_words
 
 WORDS = load_words()
 STOI, ITOS = build_vocab(WORDS)

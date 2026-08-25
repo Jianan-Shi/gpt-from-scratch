@@ -3,18 +3,22 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from bigram import (bpc, build_dataset, build_vocab, fit_counting, fit_neural,
-                    load_words, nll_counting, nll_neural, split_words, VOCAB_SIZE)
+from bigram import (build_dataset, fit_counting, fit_neural, nll_counting,
+                    nll_neural)
+from nnzh.data import ROOT, VOCAB_SIZE, bpc, build_vocab, load_words, split_words
+
+FIGURES = ROOT / "figures"
 
 words = load_words()
 stoi, itos = build_vocab(words)
-tr_words, va_words = split_words(words)
+tr_words, va_words, _test = split_words(words)  # test 集全程不碰
 xs_tr, ys_tr = build_dataset(tr_words, stoi)
 xs_va, ys_va = build_dataset(va_words, stoi)
 
 # ---------- 实验 1：平滑量 × 训练集大小 ----------
-# 全量数据上平滑只有偏差、没有方差可对冲（验证集里 0 个 bigram 是训练集没见过的），
-# 曲线单调。把训练集饿瘦，未见 bigram 出现，k→0 才会爆炸，U 形才现身。
+# U 形的深度由「验证集里有多少 bigram 训练集没见过」决定：未见 bigram 让 k→0 时
+# 概率趋零、loss 爆炸，这是方差侧；k 过大则把分布压平，这是偏差侧。数据越少未见
+# 越多，U 越深。全量数据上未见率只有 0.03%，U 浅到几乎看不见。
 ks = np.logspace(-3, 2, 30)
 sizes = [500, 2000, len(tr_words)]
 
@@ -26,17 +30,18 @@ for n in sizes:
     curve = [bpc(nll_counting(fit_counting(xs_n, ys_n, smoothing=float(k)), xs_va, ys_va))
              for k in ks]
     b = int(np.argmin(curve))
+    depth = curve[0] - curve[b]          # 左端相对最低点的落差 = U 有多深
     line, = plt.semilogx(ks, curve, lw=1.6,
-                         label=f"{n} words — best k={ks[b]:.3g}, {curve[b]:.3f} bpc")
+                         label=f"{n} words — {unseen:.2%} unseen, U depth {depth:.3f} bpc")
     plt.plot(ks[b], curve[b], "o", c=line.get_color(), ms=5)
     print(f"{n:>6} train words  unseen val bigrams {unseen:6.2%}  "
-          f"best k={ks[b]:.4g}  val={curve[b]:.4f} bpc")
+          f"best k={ks[b]:.4g}  val={curve[b]:.4f} bpc  U depth={depth:.4f}")
 
 plt.axhline(np.log2(VOCAB_SIZE), ls=":", c="crimson", lw=1, label="uniform (4.755)")
 plt.xlabel("smoothing k"); plt.ylabel("validation bits per character")
-plt.title("Smoothing sweep — the U-curve is a small-data phenomenon")
+plt.title("Smoothing sweep — the U deepens as unseen bigrams appear")
 plt.legend(fontsize=8); plt.grid(alpha=.3); plt.tight_layout()
-plt.savefig("../figures/bigram_smoothing_sweep.png", dpi=150)
+plt.savefig(FIGURES / "bigram_smoothing_sweep.png", dpi=150)
 
 # ---------- 实验 2：梯度下降收敛到解析解 ----------
 W, hist = fit_neural(xs_tr, ys_tr, steps=300, lr=50.0, reg=0.0)
@@ -49,7 +54,7 @@ plt.axhline(floor, ls="--", c="crimson", lw=1, label=f"counting MLE = {floor:.4f
 plt.xlabel("step"); plt.ylabel("train bits per character")
 plt.title("Two methods, one optimum")
 plt.legend(); plt.grid(alpha=.3); plt.tight_layout()
-plt.savefig("../figures/bigram_convergence.png", dpi=150)
+plt.savefig(FIGURES / "bigram_convergence.png", dpi=150)
 print(f"final gap = {bpc(nll_neural(W, xs_tr, ys_tr)) - floor:.5f} bpc")
 
 # ---------- unigram 基线 ----------

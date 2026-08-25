@@ -1,33 +1,8 @@
 """Bigram character-level language model, fit two ways: counting and gradient descent."""
-import math
-from pathlib import Path
-
 import torch
 import torch.nn.functional as F
 
-VOCAB_SIZE = 27
-DATA_PATH = Path(__file__).parent / "data" / "names.txt"
-
-
-def load_words(path=DATA_PATH):
-    return Path(path).read_text().splitlines()
-
-
-def build_vocab(words):
-    chars = sorted(set("".join(words)))
-    stoi = {ch: i + 1 for i, ch in enumerate(chars)}
-    stoi["."] = 0
-    itos = {i: ch for ch, i in stoi.items()}
-    return stoi, itos
-
-
-def split_words(words, frac=0.9, seed=42):
-    """按【词】划分，不是按 bigram —— 同一个名字的相邻字符必须留在同一侧。"""
-    g = torch.Generator().manual_seed(seed)
-    perm = torch.randperm(len(words), generator=g).tolist()
-    shuffled = [words[i] for i in perm]
-    n = int(frac * len(shuffled))
-    return shuffled[:n], shuffled[n:]
+from nnzh.data import VOCAB_SIZE, bpc, build_vocab, load_words, split_words
 
 
 def build_dataset(words, stoi):
@@ -86,17 +61,14 @@ def sample(P, itos, n=5, seed=2147483647):
     return names
 
 
-def bpc(nats):
-    return nats / math.log(2)
-
-
 if __name__ == "__main__":
     words = load_words()
     stoi, itos = build_vocab(words)
-    tr_words, va_words = split_words(words)
+    # te_words 全程不碰，只在最后一章评估一次。
+    tr_words, va_words, te_words = split_words(words)
     xs_tr, ys_tr = build_dataset(tr_words, stoi)
     xs_va, ys_va = build_dataset(va_words, stoi)
-    print(f"{len(tr_words)} train words / {len(va_words)} val words, "
+    print(f"{len(tr_words)} train / {len(va_words)} val / {len(te_words)} test words, "
           f"{len(xs_tr)} train bigrams")
 
     P = fit_counting(xs_tr, ys_tr, smoothing=1.0)

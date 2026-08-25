@@ -1,7 +1,11 @@
 __pycache__/
+*.pyc
+*.egg-info/
+.ipynb_checkpoints/
+.pytest_cache/
 *.pt
 *.pth
-data/
-.ipynb_checkpoints/
-__pycache__/
-*.pyc
+
+# 共享数据集进版本控制，其余数据文件不进
+data/*
+!data/names.txt
