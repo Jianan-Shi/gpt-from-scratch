@@ -6,10 +6,11 @@ numbers stay comparable across chapters.
 
 ```
 data/names.txt        shared by chapters 02–06
-nnzh/                 shared utilities (vocab, split, bpc) — the split seed lives here
+nnzh/                 shared utilities (vocab, split, dataset, bpc) — the split seed lives here
 01_micrograd/         autograd engine + PyTorch gradient parity tests
 02_bigram/            bigram LM, fit by counting and by gradient descent
 03_mlp/               Bengio-style MLP with a fixed context window
+04_batchnorm/         (in progress) initialisation, activation stats, BatchNorm
 experiments/bpc.md    the running scoreboard: bits per character, every model
 figures/
 ```

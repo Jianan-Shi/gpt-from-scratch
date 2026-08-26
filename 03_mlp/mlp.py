@@ -8,24 +8,12 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 
-from nnzh.data import VOCAB_SIZE, bpc, build_vocab, load_words, split_words
+from nnzh.data import (VOCAB_SIZE, bpc, build_dataset, build_vocab, load_words,
+                       split_words)
 
 BLOCK_SIZE = 3
 N_EMBD = 10
 N_HIDDEN = 200
-
-
-def build_dataset(words, stoi, block_size=BLOCK_SIZE):
-    """每个位置生成一条样本，词与词之间 context 重置，避免跨词泄漏。"""
-    xs, ys = [], []
-    for w in words:
-        context = [0] * block_size
-        for ch in w + ".":
-            ix = stoi[ch]
-            xs.append(context)
-            ys.append(ix)
-            context = context[1:] + [ix]   # 重新绑定，不是就地修改
-    return torch.tensor(xs), torch.tensor(ys)
 
 
 @dataclass
@@ -118,8 +106,8 @@ if __name__ == "__main__":
     words = load_words()
     stoi, itos = build_vocab(words)
     tr_words, va_words, te_words = split_words(words)   # te 全程不碰
-    Xtr, Ytr = build_dataset(tr_words, stoi)
-    Xva, Yva = build_dataset(va_words, stoi)
+    Xtr, Ytr = build_dataset(tr_words, stoi, BLOCK_SIZE)
+    Xva, Yva = build_dataset(va_words, stoi, BLOCK_SIZE)
 
     model = init_mlp()
     n_params = sum(p.nelement() for p in model.parameters())

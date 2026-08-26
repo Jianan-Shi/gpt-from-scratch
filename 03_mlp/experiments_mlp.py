@@ -5,8 +5,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from mlp import build_dataset, fit, init_mlp, nll
-from nnzh.data import ROOT, VOCAB_SIZE, bpc, build_vocab, load_words, split_words
+from mlp import BLOCK_SIZE, fit, init_mlp, nll
+from nnzh.data import (ROOT, VOCAB_SIZE, bpc, build_dataset, build_vocab,
+                       load_words, split_words)
 
 FIGURES = ROOT / "figures"
 BIGRAM_VAL_BPC = 3.5555          # 02_bigram 的计数法最优值，见 experiments/bpc.md
@@ -19,7 +20,7 @@ tr_words, va_words, _test = split_words(words)   # test 全程不碰
 # Karpathy 的做法：一次训练里每步换一个 lr，看 loss 在哪个量级开始发散。
 # 注意这个方法的偏差：loss 天然随步数下降，所以左半段偏低。它能可靠告诉你
 # 「上界在哪」，不能精确告诉你「最优是多少」。
-Xtr, Ytr = build_dataset(tr_words, stoi)
+Xtr, Ytr = build_dataset(tr_words, stoi, BLOCK_SIZE)
 lre = torch.linspace(-3, 0, 1000)
 lrs = 10**lre
 
@@ -90,8 +91,8 @@ plt.legend(fontsize=8); plt.grid(alpha=.3); plt.tight_layout()
 plt.savefig(FIGURES / "mlp_block_size.png", dpi=150)
 
 # ---------- 实验 3：二维 embedding 里学到了什么 ----------
-Xt, Yt = build_dataset(tr_words, stoi)
-Xv, Yv = build_dataset(va_words, stoi)
+Xt, Yt = build_dataset(tr_words, stoi, BLOCK_SIZE)
+Xv, Yv = build_dataset(va_words, stoi, BLOCK_SIZE)
 m2 = init_mlp(n_embd=2)
 fit(m2, Xt, Yt)
 print(f"n_embd=2  val {bpc(nll(m2, Xv, Yv)):.4f} bpc")

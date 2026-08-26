@@ -2,13 +2,13 @@ import math
 
 import torch
 
-from mlp import BLOCK_SIZE, build_dataset, fit, init_mlp, nll, sample
-from nnzh.data import VOCAB_SIZE, build_vocab, load_words
+from mlp import BLOCK_SIZE, fit, init_mlp, nll, sample
+from nnzh.data import VOCAB_SIZE, build_dataset, build_vocab, load_words
 
 WORDS = load_words()
 STOI, ITOS = build_vocab(WORDS)
 SMALL = WORDS[:2000]
-X, Y = build_dataset(SMALL, STOI)
+X, Y = build_dataset(SMALL, STOI, BLOCK_SIZE)
 
 
 def test_dataset_shape_and_dtype():
@@ -84,7 +84,10 @@ def test_samples_contain_no_terminator():
         assert "." not in name
 
 
-# TODO(你自己想一个测试)。备选思路：
-#   - block_size 越大，build_dataset 的行数不变但 X 的列数跟着变
-#   - 同一个字符在不同位置拿到的 embedding 相同（查表的确定性）
-#   - fit 的 history 长度等于 steps，且末尾 100 步均值低于开头 100 步均值
+def test_block_size_changes_columns_not_rows():
+    """列数 = block_size，行数与它无关：每个词永远贡献 len(w)+1 条样本。"""
+    rows = sum(len(w)+1 for w in SMALL)
+    for bs in [1, 3, 5, 8]:
+        X, Y = build_dataset(SMALL, STOI, block_size=bs)
+        assert X.shape == (rows, bs)
+        assert Y.shape == (rows,)

@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from bigram import (build_dataset, fit_counting, fit_neural, nll_counting,
                     nll_neural)
 from nnzh.data import VOCAB_SIZE, build_vocab, load_words
+from nnzh.data import build_dataset as shared_build_dataset
 
 WORDS = load_words()
 STOI, ITOS = build_vocab(WORDS)
@@ -58,6 +59,17 @@ def test_two_methods_converge():
     W, _ = fit_neural(XS, YS, steps=500, lr=50.0, reg=0.0)
     gap = nll_neural(W, XS, YS) - nll_counting(P, XS, YS)
     assert -1e-4 < gap < 0.02, f"gap = {gap}"
+
+
+def test_matches_shared_build_dataset():
+    """本章的 build_dataset 必须和 nnzh 的 block_size=1 完全一致。
+
+    两份实现同时存在时，改了一份忘了另一份不会报错、只会让 bpc.md 里的数字
+    悄悄变得不可比。这条测试把它们钉在一起。
+    """
+    xs, ys = shared_build_dataset(WORDS, STOI, block_size=1)
+    assert torch.equal(XS, xs.squeeze(1))
+    assert torch.equal(YS, ys)
 
 
 # TODO(你自己想一个测试，和 micrograd 那次一样)。备选思路：
