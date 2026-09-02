@@ -10,7 +10,8 @@ nnzh/                 shared utilities (vocab, split, dataset, bpc) — the spli
 01_micrograd/         autograd engine + PyTorch gradient parity tests
 02_bigram/            bigram LM, fit by counting and by gradient descent
 03_mlp/               Bengio-style MLP with a fixed context window
-04_batchnorm/         (in progress) initialisation, activation stats, BatchNorm
+04_batchnorm/         initialisation, activation stats, BatchNorm, diagnostics
+05_backprop/          (in progress) backprop by hand through the whole net
 experiments/bpc.md    the running scoreboard: bits per character, every model
 figures/
 ```
@@ -19,7 +20,7 @@ Setup:
 
 ```bash
 pip install -e .      # editable install of nnzh/, so `from nnzh.data import ...` works anywhere
-pytest                # 23 tests across all chapters
+pytest                # 42 tests across all chapters
 ```
 
 ## 02 — Bigram language model
@@ -64,5 +65,42 @@ Beyond the lecture:
 Tests assert the initialisation puts step-0 loss at `ln 27`, that the flattened
 embedding preserves position order, and that the context window resets between
 words (a leak that would otherwise be silent).
+
+See [`experiments/bpc.md`](experiments/bpc.md).
+
+## 04 — Initialisation, activation statistics, BatchNorm
+
+Six layers (five tanh hidden layers of 100, plus an output layer), 47,024 params,
+**3.0521 bpc val** — indistinguishable from the 03 MLP's 3.0648 with a fifth of the
+context budget spent on depth instead. That *is* the chapter's result: none of part
+3's machinery moves the score on this dataset. What it moves is how much you have to
+care about getting the initialisation right.
+
+Beyond the lecture:
+- **Ablation, one fix at a time** (squashed output layer → Kaiming gain 5/3 →
+  BatchNorm) under an identical 100k-step budget. All five variants land within
+  0.02 bpc of each other, and the ordering runs the wrong way: each added fix costs a
+  hair of final loss. Three seeds per configuration confirm the BatchNorm gap
+  (0.033 bpc) is real and not seed noise, while the initialisation gaps are not.
+- **BatchNorm makes the forward pass exactly scale-invariant.** `gain=1` and
+  `gain=5/3` give pointwise identical logits (maxdiff 3.5e-6); without BN the same
+  pair differs by 0.15. This is what "BN removes the need to tune the initialisation"
+  means literally, and a test asserts it.
+- **What forgetting `model.eval()` actually costs**, measured: 3.0452 bpc at batch
+  256, 3.1205 at batch 32, 4.6392 at batch 2 — the last is worse than the bigram.
+  BN couples the examples in a batch, and at inference that becomes a dependency on
+  who else happened to be in the batch. Nothing raises an error.
+- **Depth × BatchNorm sweep** (2/4/6/10 layers): depth saturates after 4 layers
+  (4 → 10 buys 0.010 bpc), and the BN branch is ~0.03 bpc worse at every depth. With
+  Kaiming initialisation already in place, a 10-layer tanh net trains fine without BN.
+- **The update:data ratio disagrees with the lecture's learning rate.** lr=0.1 sits at
+  log10 ≈ −2.55 against the −3 rule of thumb, pointing at lr ≈ 0.03. The diagnostic
+  costs 1000 steps instead of a full sweep.
+
+Tests assert that a bias in front of BatchNorm has literally no effect (hence
+`bias=False`), that the running buffers agree with an explicit calibration pass over
+the training set, that eval mode decouples examples inside a batch while train mode
+does not, and that train mode is undefined at batch 1 — which is why sampling has to
+switch to eval.
 
 See [`experiments/bpc.md`](experiments/bpc.md).

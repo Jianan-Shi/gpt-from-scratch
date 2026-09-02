@@ -21,8 +21,13 @@ side — a bigram-level split would leak `em` into train while `mm` sits in val.
 | MLP (block_size=3) | 3 | 11,897 | 2.9643 | 3.0648 | the lecture's configuration |
 | MLP (block_size=6) | 6 | 17,897 | 2.8197 | **2.9769** | best so far |
 | MLP (block_size=8) | 8 | 21,897 | 2.8132 | 2.9870 | train ↓ but val ↑ — overfitting |
+| deep MLP (6×100, Kaiming, no BN) | 3 | 46,497 | 2.8771 | 3.0399 | 100k steps, batch 32 |
+| deep MLP (6×100, + BatchNorm) | 3 | 47,024 | 2.9516 | **3.0521** | the part-3 configuration |
 
 MLP rows: `n_embd=10`, `n_hidden=200`, 60k steps of minibatch-64 SGD, lr 0.1 → 0.01 at 40k.
+Deep MLP rows: `n_embd=10`, 5 hidden layers of 100 + output layer, 100k steps of
+minibatch-32 SGD, lr 0.1 → 0.01 at 50k. With BatchNorm the `Linear` layers carry no
+bias — BN subtracts the mean, so a preceding bias has exactly zero effect.
 
 ## Findings — bigram
 
@@ -76,6 +81,77 @@ MLP rows: `n_embd=10`, `n_hidden=200`, 60k steps of minibatch-64 SGD, lr 0.1 →
   `miloparekelseananaraelyn`, `kyriquopoof`. Three characters of context cannot
   track how long the name already is.
 
+## Findings — initialisation and BatchNorm
+
+The ablation, one fix added at a time (same 100k-step budget, same split):
+
+| variant | step-0 loss (nats) | train bpc | val bpc |
+|---|---|---|---|
+| naive (gain=1, output layer not squashed) | 3.3642 | 2.8846 | 3.0331 |
+| + squashed output layer | 3.2983 | 2.8936 | 3.0381 |
+| + Kaiming gain 5/3 | 3.3020 | 2.8771 | 3.0399 |
+| + BatchNorm | 3.3020 | 2.9516 | 3.0521 |
+| BatchNorm with gain=1 | 3.2983 | 2.9446 | 3.0455 |
+
+- **This chapter buys robustness, not score — and BatchNorm costs a little.** All five
+  variants land within 0.02 bpc of each other, and none beats the 03 MLP's 3.0648 by
+  more than 0.03. The ordering is small but it is not noise: three seeds of the same
+  configuration (50k steps) give
+
+  | seed | Kaiming, no BN | + BatchNorm |
+  |---|---|---|
+  | 2147483647 | 3.0540 | 3.0822 |
+  | 1234 | 3.0544 | 3.0886 |
+  | 777 | 3.0577 | 3.0941 |
+  | spread | 0.0038 | 0.0119 |
+
+  — the two triples do not overlap, and the 0.033 bpc gap between them is ~9× the
+  no-BN seed spread. So on this task the initialisation fixes change the *first few
+  hundred steps* and nothing else, while BatchNorm changes the destination slightly
+  for the worse. The reason the init fixes do so little is that `Linear` already
+  divides by `sqrt(fan_in)`: the largest failure mode is gone before the chapter
+  starts, and the naive row here is only naive relative to that.
+- **BatchNorm makes the forward pass exactly invariant to weight scale.** `gain=1` and
+  `gain=5/3` produce pointwise identical logits (maxdiff 3.5e-6 against a signal of
+  0.08); without BN the same comparison differs by 0.15. This is the real selling
+  point — "initialisation must be just right" stops being a thing you tune — and it
+  is the reason the last two ablation rows are indistinguishable.
+- **Forgetting `model.eval()` costs more the smaller the batch.** Same trained model,
+  same validation set:
+
+  | evaluation mode | val bpc |
+  |---|---|
+  | eval (running stats) | 3.0521 |
+  | train mode, batch 256 | 3.0452 ± 0.1086 |
+  | train mode, batch 32 | 3.1205 ± 0.3479 |
+  | train mode, batch 2 | 4.6392 ± 1.3463 |
+
+  BN couples the examples inside a batch; at inference that coupling turns into a
+  dependency on which neighbours happened to be batched together. At batch 2 it costs
+  1.59 bpc — worse than the bigram. It never raises an error.
+- **Depth saturates fast, and BatchNorm costs 0.03 bpc at every depth** (50k steps):
+
+  | layers | no BN | with BN |
+  |---|---|---|
+  | 2 | 3.1410 | 3.1646 |
+  | 4 | 3.0620 | 3.1016 |
+  | 6 | 3.0540 | 3.0822 |
+  | 10 | 3.0524 | 3.0784 |
+
+  2 → 4 layers buys 0.08 bpc, 4 → 6 buys 0.008, 6 → 10 buys 0.002. With Kaiming
+  initialisation in place, a 10-layer tanh net trains fine without BN on this task —
+  BN's noise is a pure cost here. It would start paying for itself where hand-tuning
+  the initialisation stops being feasible.
+- **The update:data ratio disagrees with the lecture's learning rate.**
+  `log10((lr*grad).std() / data.std())`, median over the weight matrices: lr=0.001
+  gives −5.08, lr=0.1 gives −2.55, lr=1.0 gives −1.97. The rule of thumb is −3, which
+  points at lr ≈ 0.03 — the lecture's 0.1 is about 3× above it. This diagnostic costs
+  1000 steps, versus a full sweep for the same information.
+- Activation std across the five tanh layers at step 0: gain=1 without BN shrinks
+  0.625 → 0.321 layer by layer; gain=5/3 holds 0.76 → 0.66; with BN it is a flat 0.63
+  at every depth. Gradient std moves the same way, which is what "the gain compensates
+  for tanh's squashing" actually means.
+
 ## Reproducibility
 
 - torch 2.6.0+cu124, Python 3.11.15
@@ -91,3 +167,7 @@ MLP rows: `n_embd=10`, `n_hidden=200`, 60k steps of minibatch-64 SGD, lr 0.1 →
 - `figures/mlp_lr_sweep.png`
 - `figures/mlp_block_size.png`
 - `figures/mlp_embeddings.png`
+- `figures/bn_init_stats.png`
+- `figures/bn_ablation.png`
+- `figures/bn_depth.png`
+- `figures/bn_update_ratio.png`
