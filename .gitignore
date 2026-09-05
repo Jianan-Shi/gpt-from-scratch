@@ -9,3 +9,6 @@ __pycache__/
 # 共享数据集进版本控制，其余数据文件不进
 data/*
 !data/names.txt
+
+# Karpathy 原版仓库的本地 clone（自带 .git，仅作对照参考，不进版本控制）
+nn-zero-to-hero/
