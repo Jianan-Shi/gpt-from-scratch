@@ -104,3 +104,37 @@ does not, and that train mode is undefined at batch 1 — which is why sampling 
 switch to eval.
 
 See [`experiments/bpc.md`](experiments/bpc.md).
+
+## 05 — Becoming a backprop ninja
+
+The part-3 network again — one 200-unit hidden layer with BatchNorm, 12,297 params,
+**3.0629 bpc val** against that model's 3.0648. Landing in the same place is the
+result: this chapter replaces `loss.backward()`, not the network. All 200k steps run
+under `torch.no_grad()`, driven by gradients derived by hand — through cross-entropy,
+tanh, BatchNorm's three paths, the matmuls, and the embedding table's scatter-add.
+
+The four exercises go from mechanical to closed-form: reproduce every intermediate
+gradient one op at a time, then collapse `softmax` + NLL into `(p - onehot) / n`, then
+collapse the six BatchNorm steps into one expression, then train on the result.
+
+Beyond the lecture:
+- **`exact: False` from `hpreact` down is the kernel, not the derivation.** Sixteen
+  nodes fail bit-equality while passing `allclose`, which reads like a broken formula.
+  It is one 1-ULP difference at `tanh` propagating: torch 2.6's vectorised
+  `tanh_backward` evaluates `1 - h*h` with an FMA, rounding once where
+  `(1.0 - h**2) * dh` rounds twice — 626 of 2048 elements differ in the last bit.
+  Seeding `dhpreact` from `aten::tanh_backward` makes all fifteen downstream nodes
+  `exact: True` again, which is the proof that the hand-written chain is bit-perfect.
+  The same code is fully exact on torch 2.11's CPU build. `approximate` is the
+  criterion that means anything here.
+- **The guide's parameter cell was not reproducible.** `bngain` and `bnbias` were
+  built without `generator=g`, so they drew from the unseeded global RNG and every
+  re-execution produced different losses, different gradients, and a different
+  reported bpc. Inherited from the upstream notebook, and invisible until you compare
+  two runs. Fixed in both the exercise cell and the training cell.
+
+Exercises 2 and 3 are expected to fail bit-equality on their own terms: a fused
+closed-form expression cannot be expected to round like an eight-step chain
+(`maxdiff` 6.1e-9 and 9.3e-10 respectively).
+
+See [`experiments/bpc.md`](experiments/bpc.md).

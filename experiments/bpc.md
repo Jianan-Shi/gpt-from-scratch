@@ -23,11 +23,17 @@ side — a bigram-level split would leak `em` into train while `mm` sits in val.
 | MLP (block_size=8) | 8 | 21,897 | 2.8132 | 2.9870 | train ↓ but val ↑ — overfitting |
 | deep MLP (6×100, Kaiming, no BN) | 3 | 46,497 | 2.8771 | 3.0399 | 100k steps, batch 32 |
 | deep MLP (6×100, + BatchNorm) | 3 | 47,024 | 2.9516 | **3.0521** | the part-3 configuration |
+| MLP + BN, manual backward | 3 | 12,297 | 2.9794 | 3.0629 | part-4 config; every gradient hand-written |
 
 MLP rows: `n_embd=10`, `n_hidden=200`, 60k steps of minibatch-64 SGD, lr 0.1 → 0.01 at 40k.
 Deep MLP rows: `n_embd=10`, 5 hidden layers of 100 + output layer, 100k steps of
 minibatch-32 SGD, lr 0.1 → 0.01 at 50k. With BatchNorm the `Linear` layers carry no
 bias — BN subtracts the mean, so a preceding bias has exactly zero effect.
+
+The manual-backward row: `n_embd=10`, `n_hidden=200`, 200k steps of minibatch-32 SGD,
+lr 0.1 → 0.01 at 100k, BatchNorm calibrated by an explicit pass over the training set
+after training rather than by running buffers. It lands on the part-3 MLP's 3.0648
+because it *is* that model — the chapter replaces `loss.backward()`, not the network.
 
 ## Findings — bigram
 
