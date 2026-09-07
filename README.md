@@ -138,3 +138,31 @@ closed-form expression cannot be expected to round like an eight-step chain
 (`maxdiff` 6.1e-9 and 9.3e-10 respectively).
 
 See [`experiments/bpc.md`](experiments/bpc.md).
+
+## 06 — WaveNet — watched, not built
+
+Lecture 5 of makemore was watched rather than typed along, so there is no runnable
+code and no bpc row for it. [`06_wavenet/guide.ipynb`](06_wavenet/guide.ipynb) keeps
+the notes: the refactor into `Linear` / `BatchNorm1d` / `Tanh` / `Embedding` /
+`Flatten` / `Sequential`, the hierarchical `FlattenConsecutive` tree that replaces the
+flat concatenation, and the one real trap in the chapter — `BatchNorm1d` on a 3-D
+input has to take statistics over `dim=(0, 1)`, not `dim=0`. Writing `dim=0` raises
+nothing, trains fine, and silently gives `running_mean` the shape `(1, T, C)` instead
+of `(1, C)`.
+
+The chapter still matters for what comes next: it pushes the context window from 3 to
+8 by stacking depth, but the window stays fixed and how positions combine stays wired
+into the architecture. That is exactly what attention replaces.
+
+## 07 — Let's build GPT
+
+In progress. New corpus: tiny Shakespeare, 1,115,394 characters, 65-character vocab,
+split 90/10 **by position** — the text is continuous, so shuffling would put both
+halves of a sentence on opposite sides of the split and flatter the validation loss.
+Data plumbing lives in [`nnzh/shakespeare.py`](nnzh/shakespeare.py).
+
+Losses here are **not comparable to chapters 01-05**: different corpus, and the
+uniform baseline moves from log2(27) = 4.755 to log2(65) = 6.022 bpc. They get their
+own table.
+
+See [`experiments/bpc.md`](experiments/bpc.md).
