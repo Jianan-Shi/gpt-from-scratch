@@ -11,5 +11,9 @@ data/*
 !data/names.txt
 !data/tinyshakespeare.txt
 
-# Karpathy 原版仓库的本地 clone（自带 .git，仅作对照参考，不进版本控制）
+# Karpathy 原版仓库的本地 clone（各自带 .git，仅作对照参考，不进版本控制）
 nn-zero-to-hero/
+ng-video-lecture/
+build-nanogpt/
+nanoGPT/
+llm.c/

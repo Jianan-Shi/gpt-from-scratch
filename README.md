@@ -166,3 +166,25 @@ uniform baseline moves from log2(27) = 4.755 to log2(65) = 6.022 bpc. They get t
 own table.
 
 See [`experiments/bpc.md`](experiments/bpc.md).
+
+## 09 — Let's reproduce GPT-2 (124M)
+
+In progress. Chapter 07 already had a correct Transformer; this one keeps the
+architecture and rebuilds everything around it — GPT-2's 50257-token BPE vocabulary
+and 1024-token context, weights loadable from OpenAI's released 124M checkpoint,
+the throughput work (TF32, bfloat16, `torch.compile`, Flash Attention, and padding
+the vocab from 50257 to 50304 so the matmuls land on tile boundaries), the GPT-3
+paper's optimiser settings, and FineWeb-Edu with HellaSwag for evaluation.
+
+Two initialisation details chapter 07 skipped: weight tying between `wte` and
+`lm_head`, worth 38M of the 124M parameters, and scaling the residual projections by
+`(2 * n_layer) ** -0.5`.
+
+Reference implementation is `build-nanogpt/` (a local clone, not tracked here) whose
+44 commits are the video's timeline — `git diff` between two of them is faster than
+scrubbing the recording.
+
+Numbering follows the lecture series, so 08 stays reserved for the tokenizer lecture,
+which has not been done.
+
+See [`experiments/bpc.md`](experiments/bpc.md).
