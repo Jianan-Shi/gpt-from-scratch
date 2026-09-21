@@ -1,0 +1,7 @@
+2026-09-18 ~11:50 -> 22:03, max_steps=280, warmup_steps=10, B=4, total_batch_size=2**19.
+Two identical training processes ran at the same time by accident:
+- train.out is the nohup one; the other printed to a terminal and was not saved.
+- log.txt interleaves both (each step appears twice, values differ only in the 4th-5th decimal).
+- model_00279.pt was written by both; whichever finished its final eval last won.
+Both sharing the 8GB GPU spilled VRAM into host RAM: ~131 s/step instead of ~23.6 s.
+Results (either process): val loss 10.96 -> ~6.00, HellaSwag ~0.244 (random = 0.25).

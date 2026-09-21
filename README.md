@@ -4,6 +4,21 @@ Working through Karpathy's *Neural Networks: Zero to Hero*, one directory per
 lecture, with a shared dataset and a shared train/val/test split so the loss
 numbers stay comparable across chapters.
 
+## Results
+
+| chapter | model | params | val | baseline |
+|---|---|---|---|---|
+| 02 | bigram (counting) | 729 | 3.5555 bpc | 4.7549 uniform |
+| 03 | MLP, 6-char context | 17,897 | **2.9769 bpc** | 3.5555 bigram |
+| 04 | 6 layers + BatchNorm | 47,024 | 3.0521 bpc | 3.0648 the 03 MLP |
+| 05 | same net, every gradient hand-written | 12,297 | 3.0629 bpc | 3.0648 with autograd |
+| 09 | **GPT-2 124M, trained on one RTX 4060 8GB** | 124M | **3.5475 nats/token**, HellaSwag **0.2634** | 3.2799 / 0.2976 — OpenAI's checkpoint, measured here |
+
+Chapters 02–05 are character-level on names, scored in bits per character against a
+shared split. Chapter 09 is a different corpus, tokenizer and unit; it is scored against
+OpenAI's released GPT-2 evaluated by the same code on the same tokens
+([`09_gpt2/eval_gpt2_baseline.py`](09_gpt2/eval_gpt2_baseline.py)).
+
 ```
 data/names.txt        shared by chapters 02–06
 nnzh/                 shared utilities (vocab, split, dataset, bpc) — the split seed lives here
@@ -11,7 +26,9 @@ nnzh/                 shared utilities (vocab, split, dataset, bpc) — the spli
 02_bigram/            bigram LM, fit by counting and by gradient descent
 03_mlp/               Bengio-style MLP with a fixed context window
 04_batchnorm/         initialisation, activation stats, BatchNorm, diagnostics
-05_backprop/          (in progress) backprop by hand through the whole net
+05_backprop/          backprop by hand through the whole net
+07_gpt/               (in progress) Let's build GPT — tiny Shakespeare
+09_gpt2/              GPT-2 124M: training script, HellaSwag eval, run logs
 experiments/bpc.md    the running scoreboard: bits per character, every model
 figures/
 ```
@@ -20,7 +37,7 @@ Setup:
 
 ```bash
 pip install -e .      # editable install of nnzh/, so `from nnzh.data import ...` works anywhere
-pytest                # 42 tests across all chapters
+pytest                # 52 tests across all chapters
 ```
 
 ## 02 — Bigram language model
@@ -169,16 +186,93 @@ See [`experiments/bpc.md`](experiments/bpc.md).
 
 ## 09 — Let's reproduce GPT-2 (124M)
 
-In progress. Chapter 07 already had a correct Transformer; this one keeps the
-architecture and rebuilds everything around it — GPT-2's 50257-token BPE vocabulary
-and 1024-token context, weights loadable from OpenAI's released 124M checkpoint,
-the throughput work (TF32, bfloat16, `torch.compile`, Flash Attention, and padding
-the vocab from 50257 to 50304 so the matmuls land on tile boundaries), the GPT-3
-paper's optimiser settings, and FineWeb-Edu with HellaSwag for evaluation.
+GPT-2's 50257-token BPE vocabulary and 1024-token context, weights loadable from
+OpenAI's released 124M checkpoint, the GPT-3 paper's optimiser settings, FineWeb-Edu
+for training and HellaSwag for evaluation. Chapter 07 already had a correct
+Transformer; this chapter rebuilds everything around it.
+
+**Trained on one RTX 4060 8GB — the lecture uses 8×A100 40GB, about 80x the memory.**
+
+| | ours | OpenAI GPT-2 124M |
+|---|---|---|
+| val loss (FineWeb-Edu, 1.31M tokens) | **3.5475** | 3.2799 |
+| HellaSwag | **0.2634** | 0.2976 |
+| tokens seen | 655M | ~100B (WebText) |
+| wall clock | 8.8h, 10,000 steps, 22K tok/s | — |
+
+Both rows were measured by the same code on the same tokens
+([`09_gpt2/eval_gpt2_baseline.py`](09_gpt2/eval_gpt2_baseline.py)) rather than quoted,
+so the 0.27 nat gap is a controlled comparison. It buys 6.5% of the original token
+budget. ![training curves](figures/gpt2_curves.png)
 
 Two initialisation details chapter 07 skipped: weight tying between `wte` and
 `lm_head`, worth 38M of the 124M parameters, and scaling the residual projections by
 `(2 * n_layer) ** -0.5`.
+
+Beyond the lecture:
+
+- **Update count, not token count, was the binding constraint.** Compared at the same
+  147M tokens on the same GPU, the lecture's 2^19-token batch (280 updates) reaches
+  6.00 val loss where a 2^16-token batch (~2,240 updates) reaches ~4.15. Same data,
+  same FLOPs, 1.85 nats apart: a batch that large computes a more precise gradient
+  than early training can use, which is why GPT-3 ramps batch size from 32K to 0.5M
+  rather than starting there. Not perfectly controlled — the first run's cosine
+  schedule had already bottomed out at step 280.
+- **An 8GB card turns "out of memory" into a silent 5x slowdown.** Under WSL2 the
+  driver pages VRAM into host RAM instead of raising, so the only symptom is that
+  everything gets slow. `torch.cuda.set_per_process_memory_fraction` brings the
+  exception back. It caps *per process*, though: two runs launched by accident each
+  stayed under the cap while together exceeding the card, and one overnight run took
+  10 hours instead of 2. The script now takes an `flock` so a second run refuses to
+  start.
+- **The measurement was wrong before the model was.** `val_loss_steps=20` is sized for
+  the lecture's B=64; at B=4 it scores only 82K tokens, and the opening of the val
+  shard is easier than its average — the training-time number read 3.5023 where the
+  same checkpoint scores 3.5475 over 1.31M tokens. Per-batch loss has a standard
+  deviation of 0.227 (min 2.53, max 4.36), so 20 batches leave a ±0.21 swing, 80
+  leave ±0.09. Trends within a run stay valid because every eval uses the same slice;
+  the absolute number is only comparable when the slice matches.
+- **HellaSwag dips below chance before rising above it.** 0.2474 at init, 0.2368 at
+  step 500, back over 0.25 near step 1500 (val loss ~4.4), 0.2634 at the end. The
+  distractors were chosen by adversarial filtering to be what language models find
+  plausible, so a model that knows token frequencies and little else is actively
+  misled. The metric only starts working once the model has more than that.
+- **Weight tying makes a naive init check pass for the wrong reason.** With
+  `wte.weight is lm_head.weight` the residual stream carries `wte[idx]` and
+  `logits = x @ wte.T` peaks at the input token itself, so scoring `targets = inputs`
+  at init gives 4.45 against `ln 128 = 4.85` on a toy config. Untying restores 4.85.
+  Both are asserted in `test_gpt2.py`.
+- **HellaSwag's upstream data is gone.** `rowanz/hellaswag` was DMCA-blocked on
+  2026-09-14 (HTTP 451); `hellaswag.py` now builds the same jsonl from the
+  `Rowan/hellaswag` dataset on HuggingFace, and `download_file` checks the HTTP status
+  so a 404 page can never be saved as if it were data again.
+
+Tests assert that Flash Attention matches the explicit `(B, nh, T, T)` implementation
+it replaced, that attention cannot see the future, that the tied embedding is one
+tensor and not two, that the residual projections get the scaled initialisation while
+other layers do not, that the learning-rate schedule hits its peak exactly at the end
+of warmup and its floor after `max_steps`, and that HellaSwag scoring ignores the
+context region entirely.
+
+### Running it
+
+```bash
+cd 09_gpt2
+python gpt2_follow.py                 # ~9h on an RTX 4060 8GB; refuses to start twice
+python plot_log.py                    # -> log/run_*/curves.png
+python eval_gpt2_baseline.py gpt2     # OpenAI's checkpoint, same eval code
+python eval_gpt2_baseline.py log/run_*/model_09999.pt
+```
+
+Each run writes to its own `log/run_YYYYmmdd_HHMMSS/`, with a copy of the script that
+produced it. Data is not in the repo: FineWeb-Edu shards come from
+`build-nanogpt/fineweb.py` (~10B tokens, 99 shards, tracked via `data_root` in
+`gpt2_follow.py`), and HellaSwag downloads on first use.
+
+Known limitations: `torch.compile` is off because it interferes with HellaSwag eval and
+generation; checkpoints hold model weights but no optimiser state, so they cannot
+resume training exactly; the DDP path is written but untested, as this is a one-GPU
+machine.
 
 Reference implementation is `build-nanogpt/` (a local clone, not tracked here) whose
 44 commits are the video's timeline — `git diff` between two of them is faster than

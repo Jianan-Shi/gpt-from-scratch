@@ -1,0 +1,340 @@
+nohup: ignoring input
+using device: cuda
+total desired batch size: 524288
+=> calculated gradient accumulation steps: 128
+found 99 shards for split train
+found 1 shards for split val
+num decayed parameter tensors: 50, with 124,354,560 parameters
+num non-decayed parameter tensors: 98, with 121,344 parameters
+using fused AdamW: True
+validation loss: 10.9553
+HellaSwag accuracy: 2484/10042=0.2474
+step     0 | loss: 10.954998 | lr 6.0000e-05 | norm: 15.3464 | dt: 204963.16ms | tok/sec: 2557.96
+step     1 | loss: 10.164291 | lr 1.2000e-04 | norm: 6.6696 | dt: 81568.28ms | tok/sec: 6427.60
+step     2 | loss: 9.775270 | lr 1.8000e-04 | norm: 2.7978 | dt: 95498.64ms | tok/sec: 5490.00
+step     3 | loss: 9.559693 | lr 2.4000e-04 | norm: 2.2816 | dt: 118436.93ms | tok/sec: 4426.73
+step     4 | loss: 9.388585 | lr 3.0000e-04 | norm: 2.0645 | dt: 119940.69ms | tok/sec: 4371.23
+step     5 | loss: 9.183543 | lr 3.6000e-04 | norm: 2.0428 | dt: 123639.28ms | tok/sec: 4240.46
+step     6 | loss: 8.944643 | lr 4.2000e-04 | norm: 1.8834 | dt: 119192.96ms | tok/sec: 4398.65
+step     7 | loss: 8.690574 | lr 4.8000e-04 | norm: 1.6503 | dt: 119381.34ms | tok/sec: 4391.71
+step     8 | loss: 8.398032 | lr 5.4000e-04 | norm: 1.4106 | dt: 123200.18ms | tok/sec: 4255.58
+step     9 | loss: 8.154967 | lr 6.0000e-04 | norm: 1.3103 | dt: 119575.50ms | tok/sec: 4384.58
+step    10 | loss: 8.038312 | lr 6.0000e-04 | norm: 2.1398 | dt: 118665.48ms | tok/sec: 4418.20
+step    11 | loss: 7.880004 | lr 5.9998e-04 | norm: 1.2600 | dt: 118458.04ms | tok/sec: 4425.94
+step    12 | loss: 7.825196 | lr 5.9993e-04 | norm: 0.9446 | dt: 114491.85ms | tok/sec: 4579.26
+step    13 | loss: 7.768874 | lr 5.9984e-04 | norm: 0.7179 | dt: 118489.55ms | tok/sec: 4424.76
+step    14 | loss: 7.632993 | lr 5.9971e-04 | norm: 1.3592 | dt: 118823.18ms | tok/sec: 4412.34
+step    15 | loss: 7.639854 | lr 5.9954e-04 | norm: 0.6874 | dt: 119147.75ms | tok/sec: 4400.32
+step    16 | loss: 7.717834 | lr 5.9934e-04 | norm: 0.8792 | dt: 118767.90ms | tok/sec: 4414.39
+step    17 | loss: 7.656418 | lr 5.9910e-04 | norm: 0.8798 | dt: 113723.63ms | tok/sec: 4610.19
+step    18 | loss: 7.860973 | lr 5.9883e-04 | norm: 0.8845 | dt: 118058.52ms | tok/sec: 4440.92
+step    19 | loss: 7.934944 | lr 5.9852e-04 | norm: 1.1893 | dt: 114020.80ms | tok/sec: 4598.18
+step    20 | loss: 7.613033 | lr 5.9817e-04 | norm: 0.6982 | dt: 118349.17ms | tok/sec: 4430.01
+step    21 | loss: 7.603796 | lr 5.9779e-04 | norm: 0.6961 | dt: 114037.75ms | tok/sec: 4597.49
+step    22 | loss: 7.564173 | lr 5.9737e-04 | norm: 0.9475 | dt: 113836.59ms | tok/sec: 4605.62
+step    23 | loss: 7.591417 | lr 5.9692e-04 | norm: 0.6260 | dt: 114828.57ms | tok/sec: 4565.83
+step    24 | loss: 7.475046 | lr 5.9643e-04 | norm: 0.9281 | dt: 113630.36ms | tok/sec: 4613.98
+step    25 | loss: 7.421230 | lr 5.9590e-04 | norm: 0.5180 | dt: 118058.54ms | tok/sec: 4440.92
+step    26 | loss: 7.455374 | lr 5.9533e-04 | norm: 0.5573 | dt: 114226.89ms | tok/sec: 4589.88
+step    27 | loss: 7.385141 | lr 5.9474e-04 | norm: 0.7037 | dt: 127570.67ms | tok/sec: 4109.78
+step    28 | loss: 7.358188 | lr 5.9410e-04 | norm: 0.4339 | dt: 135930.68ms | tok/sec: 3857.02
+step    29 | loss: 7.290028 | lr 5.9343e-04 | norm: 0.4774 | dt: 138720.09ms | tok/sec: 3779.47
+step    30 | loss: 7.416938 | lr 5.9272e-04 | norm: 0.5046 | dt: 136686.95ms | tok/sec: 3835.68
+step    31 | loss: 7.303238 | lr 5.9198e-04 | norm: 0.5061 | dt: 139994.48ms | tok/sec: 3745.06
+step    32 | loss: 7.304056 | lr 5.9120e-04 | norm: 0.5109 | dt: 134398.39ms | tok/sec: 3901.00
+step    33 | loss: 7.256352 | lr 5.9039e-04 | norm: 0.4914 | dt: 134918.94ms | tok/sec: 3885.95
+step    34 | loss: 7.132033 | lr 5.8954e-04 | norm: 0.4707 | dt: 135276.97ms | tok/sec: 3875.66
+step    35 | loss: 7.136339 | lr 5.8866e-04 | norm: 0.4957 | dt: 139188.28ms | tok/sec: 3766.75
+step    36 | loss: 7.165793 | lr 5.8774e-04 | norm: 0.7420 | dt: 134951.03ms | tok/sec: 3885.02
+step    37 | loss: 7.067964 | lr 5.8679e-04 | norm: 0.5182 | dt: 134979.88ms | tok/sec: 3884.19
+step    38 | loss: 7.055470 | lr 5.8580e-04 | norm: 0.5488 | dt: 129017.75ms | tok/sec: 4063.69
+step    39 | loss: 7.133621 | lr 5.8477e-04 | norm: 1.1362 | dt: 114249.02ms | tok/sec: 4588.99
+step    40 | loss: 7.083993 | lr 5.8372e-04 | norm: 0.8902 | dt: 118507.55ms | tok/sec: 4424.09
+step    41 | loss: 7.028340 | lr 5.8263e-04 | norm: 0.7522 | dt: 118147.31ms | tok/sec: 4437.58
+step    42 | loss: 6.963567 | lr 5.8150e-04 | norm: 0.5192 | dt: 113780.43ms | tok/sec: 4607.89
+step    43 | loss: 7.037234 | lr 5.8034e-04 | norm: 1.0088 | dt: 114223.73ms | tok/sec: 4590.01
+step    44 | loss: 6.970507 | lr 5.7915e-04 | norm: 0.4856 | dt: 118511.10ms | tok/sec: 4423.96
+step    45 | loss: 6.996073 | lr 5.7792e-04 | norm: 0.7316 | dt: 113945.61ms | tok/sec: 4601.21
+step    46 | loss: 6.979592 | lr 5.7666e-04 | norm: 0.5477 | dt: 114022.15ms | tok/sec: 4598.12
+step    47 | loss: 7.043195 | lr 5.7536e-04 | norm: 0.5018 | dt: 113398.38ms | tok/sec: 4623.42
+step    48 | loss: 7.067825 | lr 5.7404e-04 | norm: 0.6092 | dt: 117630.63ms | tok/sec: 4457.07
+step    49 | loss: 6.980088 | lr 5.7267e-04 | norm: 0.4321 | dt: 113714.38ms | tok/sec: 4610.57
+validation loss: 6.9544
+HellaSwag accuracy: 2449/10042=0.2439
+rank 0 sample 0: Hello, I'm a language model,
+-I. The first in be be an a number. When be, and they has that the but to it
+rank 0 sample 1: Hello, I'm a language model, can was which are in the group may the way's not to, more. The or at a in that from the
+rank 0 sample 2: Hello, I'm a language model, is thes at are it but that the as and the�C:s as a the child, and the study
+rank 0 sample 3: Hello, I'm a language model, are”:s are, a the you is of the other is a new are it. However of that or
+step    50 | loss: 7.038097 | lr 5.7128e-04 | norm: 0.4234 | dt: 608731.61ms | tok/sec: 861.28
+step    51 | loss: 6.991835 | lr 5.6985e-04 | norm: 0.4676 | dt: 118427.78ms | tok/sec: 4427.07
+step    52 | loss: 6.993132 | lr 5.6840e-04 | norm: 0.3554 | dt: 114275.14ms | tok/sec: 4587.94
+step    53 | loss: 6.938589 | lr 5.6690e-04 | norm: 0.3928 | dt: 113624.44ms | tok/sec: 4614.22
+step    54 | loss: 6.960465 | lr 5.6538e-04 | norm: 0.3483 | dt: 113936.80ms | tok/sec: 4601.57
+step    55 | loss: 6.959279 | lr 5.6383e-04 | norm: 0.3503 | dt: 113977.68ms | tok/sec: 4599.92
+step    56 | loss: 6.927226 | lr 5.6224e-04 | norm: 0.4815 | dt: 118237.19ms | tok/sec: 4434.21
+step    57 | loss: 6.933365 | lr 5.6062e-04 | norm: 0.2800 | dt: 114562.11ms | tok/sec: 4576.45
+step    58 | loss: 6.885163 | lr 5.5897e-04 | norm: 0.4972 | dt: 118487.54ms | tok/sec: 4424.84
+step    59 | loss: 6.853170 | lr 5.5729e-04 | norm: 0.3501 | dt: 114891.88ms | tok/sec: 4563.32
+step    60 | loss: 6.858733 | lr 5.5558e-04 | norm: 0.3299 | dt: 114057.13ms | tok/sec: 4596.71
+step    61 | loss: 6.885926 | lr 5.5384e-04 | norm: 0.4597 | dt: 118088.09ms | tok/sec: 4439.80
+step    62 | loss: 6.797939 | lr 5.5207e-04 | norm: 0.4417 | dt: 118733.92ms | tok/sec: 4415.65
+step    63 | loss: 6.796178 | lr 5.5027e-04 | norm: 0.6807 | dt: 119332.97ms | tok/sec: 4393.49
+step    64 | loss: 6.799797 | lr 5.4843e-04 | norm: 1.0207 | dt: 118868.56ms | tok/sec: 4410.65
+step    65 | loss: 6.845085 | lr 5.4657e-04 | norm: 0.8522 | dt: 118995.83ms | tok/sec: 4405.94
+step    66 | loss: 6.754412 | lr 5.4468e-04 | norm: 0.4756 | dt: 119102.52ms | tok/sec: 4401.99
+step    67 | loss: 6.799419 | lr 5.4276e-04 | norm: 0.7550 | dt: 119206.30ms | tok/sec: 4398.16
+step    68 | loss: 6.767412 | lr 5.4081e-04 | norm: 0.3234 | dt: 118653.22ms | tok/sec: 4418.66
+step    69 | loss: 6.687766 | lr 5.3884e-04 | norm: 0.6216 | dt: 119257.25ms | tok/sec: 4396.28
+step    70 | loss: 6.669249 | lr 5.3683e-04 | norm: 0.4975 | dt: 119332.09ms | tok/sec: 4393.52
+step    71 | loss: 6.710986 | lr 5.3480e-04 | norm: 0.7661 | dt: 119274.09ms | tok/sec: 4395.66
+step    72 | loss: 6.668536 | lr 5.3274e-04 | norm: 0.7435 | dt: 118934.89ms | tok/sec: 4408.19
+step    73 | loss: 6.665213 | lr 5.3065e-04 | norm: 0.6054 | dt: 118646.71ms | tok/sec: 4418.90
+step    74 | loss: 6.593084 | lr 5.2853e-04 | norm: 0.4056 | dt: 119550.11ms | tok/sec: 4385.51
+step    75 | loss: 6.647181 | lr 5.2639e-04 | norm: 0.6300 | dt: 123471.37ms | tok/sec: 4246.23
+step    76 | loss: 6.591110 | lr 5.2422e-04 | norm: 0.5601 | dt: 118929.47ms | tok/sec: 4408.39
+step    77 | loss: 6.629804 | lr 5.2203e-04 | norm: 0.4158 | dt: 114452.21ms | tok/sec: 4580.85
+step    78 | loss: 6.610572 | lr 5.1980e-04 | norm: 0.5290 | dt: 123469.53ms | tok/sec: 4246.29
+step    79 | loss: 6.556798 | lr 5.1756e-04 | norm: 0.3865 | dt: 118653.96ms | tok/sec: 4418.63
+step    80 | loss: 6.564685 | lr 5.1529e-04 | norm: 0.3852 | dt: 119152.13ms | tok/sec: 4400.16
+step    81 | loss: 6.574438 | lr 5.1299e-04 | norm: 0.4485 | dt: 118985.85ms | tok/sec: 4406.31
+step    82 | loss: 6.527774 | lr 5.1067e-04 | norm: 0.5723 | dt: 119678.26ms | tok/sec: 4380.81
+step    83 | loss: 6.493706 | lr 5.0832e-04 | norm: 0.7217 | dt: 123174.99ms | tok/sec: 4256.45
+step    84 | loss: 6.504777 | lr 5.0595e-04 | norm: 0.4494 | dt: 137640.27ms | tok/sec: 3809.12
+step    85 | loss: 6.469887 | lr 5.0355e-04 | norm: 0.4025 | dt: 140886.54ms | tok/sec: 3721.35
+step    86 | loss: 6.466435 | lr 5.0113e-04 | norm: 0.4070 | dt: 140794.71ms | tok/sec: 3723.78
+step    87 | loss: 6.500268 | lr 4.9869e-04 | norm: 0.4732 | dt: 135746.22ms | tok/sec: 3862.27
+step    88 | loss: 6.486903 | lr 4.9623e-04 | norm: 0.3680 | dt: 130281.49ms | tok/sec: 4024.27
+step    89 | loss: 6.529580 | lr 4.9374e-04 | norm: 0.3302 | dt: 126271.76ms | tok/sec: 4152.06
+step    90 | loss: 6.459320 | lr 4.9123e-04 | norm: 0.3609 | dt: 119252.87ms | tok/sec: 4396.44
+step    91 | loss: 6.467674 | lr 4.8870e-04 | norm: 0.4411 | dt: 120465.06ms | tok/sec: 4352.20
+step    92 | loss: 6.520258 | lr 4.8615e-04 | norm: 0.3212 | dt: 123532.93ms | tok/sec: 4244.12
+step    93 | loss: 6.596326 | lr 4.8358e-04 | norm: 0.3823 | dt: 119398.40ms | tok/sec: 4391.08
+step    94 | loss: 6.610009 | lr 4.8098e-04 | norm: 0.3835 | dt: 124066.43ms | tok/sec: 4225.86
+step    95 | loss: 6.602072 | lr 4.7837e-04 | norm: 0.3962 | dt: 119291.49ms | tok/sec: 4395.02
+step    96 | loss: 6.567107 | lr 4.7573e-04 | norm: 0.5790 | dt: 120288.39ms | tok/sec: 4358.59
+step    97 | loss: 6.542235 | lr 4.7308e-04 | norm: 0.9189 | dt: 134994.90ms | tok/sec: 3883.76
+step    98 | loss: 6.596524 | lr 4.7040e-04 | norm: 1.0170 | dt: 139762.77ms | tok/sec: 3751.27
+step    99 | loss: 6.532917 | lr 4.6771e-04 | norm: 0.4284 | dt: 139874.80ms | tok/sec: 3748.27
+validation loss: 6.5010
+HellaSwag accuracy: 2449/10042=0.2439
+rank 0 sample 0: Hello, I'm a language model, has to get a new system in them when and the one and we as that the work up and it’ll
+rank 0 sample 1: Hello, I'm a language model,”) to be to make on the other handing, a “The number of a child is a high
+rank 0 sample 2: Hello, I'm a language model, and the common of the people (P-3-the, he would be, as the second-the- States
+rank 0 sample 3: Hello, I'm a language model, you might all that the new, as it from the newth to the next levels that as a child. However can
+step   100 | loss: 6.583469 | lr 4.6500e-04 | norm: 0.6844 | dt: 684181.68ms | tok/sec: 766.30
+step   101 | loss: 6.519355 | lr 4.6227e-04 | norm: 0.5519 | dt: 134854.17ms | tok/sec: 3887.81
+step   102 | loss: 6.503159 | lr 4.5952e-04 | norm: 0.4559 | dt: 140188.96ms | tok/sec: 3739.87
+step   103 | loss: 6.416435 | lr 4.5676e-04 | norm: 0.5119 | dt: 130797.22ms | tok/sec: 4008.40
+step   104 | loss: 6.510324 | lr 4.5397e-04 | norm: 0.4528 | dt: 139280.69ms | tok/sec: 3764.25
+step   105 | loss: 6.517438 | lr 4.5118e-04 | norm: 0.4807 | dt: 134507.46ms | tok/sec: 3897.84
+step   106 | loss: 6.480627 | lr 4.4836e-04 | norm: 0.5917 | dt: 135011.21ms | tok/sec: 3883.29
+step   107 | loss: 6.435001 | lr 4.4553e-04 | norm: 0.5398 | dt: 134215.18ms | tok/sec: 3906.32
+step   108 | loss: 6.494778 | lr 4.4268e-04 | norm: 0.4592 | dt: 130387.18ms | tok/sec: 4021.01
+step   109 | loss: 6.493706 | lr 4.3982e-04 | norm: 0.4432 | dt: 130490.29ms | tok/sec: 4017.83
+step   110 | loss: 6.454063 | lr 4.3694e-04 | norm: 0.3940 | dt: 139427.74ms | tok/sec: 3760.28
+step   111 | loss: 6.432351 | lr 4.3405e-04 | norm: 0.4453 | dt: 134174.82ms | tok/sec: 3907.50
+step   112 | loss: 6.413499 | lr 4.3114e-04 | norm: 0.3641 | dt: 130709.00ms | tok/sec: 4011.11
+step   113 | loss: 6.455084 | lr 4.2822e-04 | norm: 0.4228 | dt: 134716.43ms | tok/sec: 3891.79
+step   114 | loss: 6.474275 | lr 4.2529e-04 | norm: 0.4077 | dt: 134677.75ms | tok/sec: 3892.91
+step   115 | loss: 6.437073 | lr 4.2235e-04 | norm: 0.3337 | dt: 130832.43ms | tok/sec: 4007.32
+step   116 | loss: 6.383637 | lr 4.1939e-04 | norm: 0.5169 | dt: 134659.98ms | tok/sec: 3893.42
+step   117 | loss: 6.333562 | lr 4.1642e-04 | norm: 0.7933 | dt: 129177.06ms | tok/sec: 4058.68
+step   118 | loss: 6.361911 | lr 4.1343e-04 | norm: 0.9677 | dt: 134253.62ms | tok/sec: 3905.21
+step   119 | loss: 6.386085 | lr 4.1044e-04 | norm: 0.6397 | dt: 135286.49ms | tok/sec: 3875.39
+step   120 | loss: 6.362806 | lr 4.0744e-04 | norm: 0.5781 | dt: 135263.18ms | tok/sec: 3876.06
+step   121 | loss: 6.334734 | lr 4.0442e-04 | norm: 0.6491 | dt: 129997.64ms | tok/sec: 4033.06
+step   122 | loss: 6.335929 | lr 4.0140e-04 | norm: 0.4424 | dt: 130205.68ms | tok/sec: 4026.61
+step   123 | loss: 6.340052 | lr 3.9836e-04 | norm: 0.4889 | dt: 135076.89ms | tok/sec: 3881.40
+step   124 | loss: 6.353430 | lr 3.9532e-04 | norm: 0.3887 | dt: 134457.91ms | tok/sec: 3899.27
+step   125 | loss: 6.344625 | lr 3.9227e-04 | norm: 0.4475 | dt: 130040.50ms | tok/sec: 4031.73
+step   126 | loss: 6.331240 | lr 3.8921e-04 | norm: 0.3217 | dt: 119670.94ms | tok/sec: 4381.08
+step   127 | loss: 6.307022 | lr 3.8614e-04 | norm: 0.3998 | dt: 118648.20ms | tok/sec: 4418.85
+step   128 | loss: 6.262467 | lr 3.8306e-04 | norm: 0.3633 | dt: 114253.64ms | tok/sec: 4588.81
+step   129 | loss: 6.258778 | lr 3.7998e-04 | norm: 0.4618 | dt: 119579.36ms | tok/sec: 4384.44
+step   130 | loss: 6.309360 | lr 3.7689e-04 | norm: 0.3291 | dt: 114807.75ms | tok/sec: 4566.66
+step   131 | loss: 6.280488 | lr 3.7379e-04 | norm: 0.4277 | dt: 118924.77ms | tok/sec: 4408.57
+step   132 | loss: 6.290441 | lr 3.7069e-04 | norm: 0.3632 | dt: 114964.30ms | tok/sec: 4560.44
+step   133 | loss: 6.209952 | lr 3.6758e-04 | norm: 0.3547 | dt: 114443.99ms | tok/sec: 4581.18
+step   134 | loss: 6.211915 | lr 3.6446e-04 | norm: 0.3295 | dt: 118551.02ms | tok/sec: 4422.47
+step   135 | loss: 6.274748 | lr 3.6135e-04 | norm: 0.3905 | dt: 113847.10ms | tok/sec: 4605.19
+step   136 | loss: 6.249979 | lr 3.5822e-04 | norm: 0.4260 | dt: 114488.90ms | tok/sec: 4579.38
+step   137 | loss: 6.281045 | lr 3.5510e-04 | norm: 0.4504 | dt: 134267.96ms | tok/sec: 3904.79
+step   138 | loss: 6.226437 | lr 3.5197e-04 | norm: 0.4199 | dt: 130758.82ms | tok/sec: 4009.58
+step   139 | loss: 6.326344 | lr 3.4883e-04 | norm: 0.4170 | dt: 134625.32ms | tok/sec: 3894.42
+step   140 | loss: 6.435936 | lr 3.4570e-04 | norm: 0.4670 | dt: 134172.52ms | tok/sec: 3907.57
+step   141 | loss: 6.336586 | lr 3.4256e-04 | norm: 0.3992 | dt: 134500.42ms | tok/sec: 3898.04
+step   142 | loss: 6.379791 | lr 3.3942e-04 | norm: 0.3431 | dt: 130081.29ms | tok/sec: 4030.46
+step   143 | loss: 6.326805 | lr 3.3628e-04 | norm: 0.4540 | dt: 126462.14ms | tok/sec: 4145.81
+step   144 | loss: 6.327440 | lr 3.3314e-04 | norm: 0.3933 | dt: 130565.09ms | tok/sec: 4015.53
+step   145 | loss: 6.321558 | lr 3.3000e-04 | norm: 0.3421 | dt: 135215.33ms | tok/sec: 3877.43
+step   146 | loss: 6.344429 | lr 3.2686e-04 | norm: 0.4385 | dt: 130910.45ms | tok/sec: 4004.94
+step   147 | loss: 6.345256 | lr 3.2372e-04 | norm: 0.3873 | dt: 135087.06ms | tok/sec: 3881.11
+step   148 | loss: 6.344067 | lr 3.2058e-04 | norm: 0.3295 | dt: 136016.71ms | tok/sec: 3854.59
+step   149 | loss: 6.324887 | lr 3.1744e-04 | norm: 0.3734 | dt: 130301.02ms | tok/sec: 4023.67
+validation loss: 6.2781
+HellaSwag accuracy: 2439/10042=0.2429
+rank 0 sample 0: Hello, I'm a language model, is a person. The world to find any student of the child with which would be to our home and you can have
+rank 0 sample 1: Hello, I'm a language model, for many cases, the "I "The day/S), then a "a's "-or; the
+rank 0 sample 2: Hello, I'm a language model, but the country,000 feet. (and in the first is to make the time of the first's not to learn
+rank 0 sample 3: Hello, I'm a language model, a certain point the other of a way.com.
+G percent of it also said for a major system, not
+step   150 | loss: 6.326795 | lr 3.1430e-04 | norm: 0.4078 | dt: 625544.80ms | tok/sec: 838.13
+step   151 | loss: 6.244764 | lr 3.1117e-04 | norm: 0.3182 | dt: 113742.67ms | tok/sec: 4609.42
+step   152 | loss: 6.281529 | lr 3.0803e-04 | norm: 0.3865 | dt: 114398.73ms | tok/sec: 4582.99
+step   153 | loss: 6.335803 | lr 3.0490e-04 | norm: 0.3982 | dt: 113920.08ms | tok/sec: 4602.24
+step   154 | loss: 6.249217 | lr 3.0178e-04 | norm: 0.4172 | dt: 118073.57ms | tok/sec: 4440.35
+step   155 | loss: 6.226203 | lr 2.9865e-04 | norm: 0.4773 | dt: 114015.59ms | tok/sec: 4598.39
+step   156 | loss: 6.278762 | lr 2.9554e-04 | norm: 0.6332 | dt: 114194.50ms | tok/sec: 4591.18
+step   157 | loss: 6.336233 | lr 2.9242e-04 | norm: 0.6420 | dt: 114494.42ms | tok/sec: 4579.16
+step   158 | loss: 6.339903 | lr 2.8931e-04 | norm: 0.4864 | dt: 114317.50ms | tok/sec: 4586.24
+step   159 | loss: 6.255555 | lr 2.8621e-04 | norm: 0.3510 | dt: 113519.29ms | tok/sec: 4618.49
+step   160 | loss: 6.203677 | lr 2.8311e-04 | norm: 0.4147 | dt: 114162.09ms | tok/sec: 4592.49
+step   161 | loss: 6.289322 | lr 2.8002e-04 | norm: 0.3736 | dt: 114017.19ms | tok/sec: 4598.32
+step   162 | loss: 6.196124 | lr 2.7694e-04 | norm: 0.3754 | dt: 118061.47ms | tok/sec: 4440.81
+step   163 | loss: 6.162879 | lr 2.7386e-04 | norm: 0.4848 | dt: 114191.41ms | tok/sec: 4591.31
+step   164 | loss: 6.182595 | lr 2.7079e-04 | norm: 0.4717 | dt: 113778.65ms | tok/sec: 4607.96
+step   165 | loss: 6.219777 | lr 2.6773e-04 | norm: 0.3465 | dt: 113951.16ms | tok/sec: 4600.99
+step   166 | loss: 6.083093 | lr 2.6468e-04 | norm: 0.5069 | dt: 117506.33ms | tok/sec: 4461.79
+step   167 | loss: 6.187482 | lr 2.6164e-04 | norm: 0.5070 | dt: 113662.69ms | tok/sec: 4612.67
+step   168 | loss: 6.172051 | lr 2.5860e-04 | norm: 0.7556 | dt: 113361.23ms | tok/sec: 4624.93
+step   169 | loss: 6.172898 | lr 2.5558e-04 | norm: 0.5641 | dt: 113727.16ms | tok/sec: 4610.05
+step   170 | loss: 6.162589 | lr 2.5256e-04 | norm: 0.5554 | dt: 118022.15ms | tok/sec: 4442.28
+step   171 | loss: 6.188741 | lr 2.4956e-04 | norm: 0.5191 | dt: 113782.13ms | tok/sec: 4607.82
+step   172 | loss: 6.165617 | lr 2.4657e-04 | norm: 0.4401 | dt: 113686.66ms | tok/sec: 4611.69
+step   173 | loss: 6.135549 | lr 2.4358e-04 | norm: 0.5302 | dt: 114023.00ms | tok/sec: 4598.09
+step   174 | loss: 6.097353 | lr 2.4061e-04 | norm: 0.6041 | dt: 114212.71ms | tok/sec: 4590.45
+step   175 | loss: 6.149979 | lr 2.3765e-04 | norm: 0.3334 | dt: 118081.57ms | tok/sec: 4440.05
+step   176 | loss: 6.109929 | lr 2.3471e-04 | norm: 0.5425 | dt: 113813.89ms | tok/sec: 4606.54
+step   177 | loss: 6.150973 | lr 2.3178e-04 | norm: 0.4553 | dt: 113669.67ms | tok/sec: 4612.38
+step   178 | loss: 6.079300 | lr 2.2886e-04 | norm: 0.3890 | dt: 114044.14ms | tok/sec: 4597.24
+step   179 | loss: 6.073936 | lr 2.2595e-04 | norm: 0.4207 | dt: 113824.50ms | tok/sec: 4606.11
+step   180 | loss: 6.068589 | lr 2.2306e-04 | norm: 0.3665 | dt: 113774.63ms | tok/sec: 4608.13
+step   181 | loss: 6.094742 | lr 2.2018e-04 | norm: 0.3093 | dt: 117960.05ms | tok/sec: 4444.62
+step   182 | loss: 6.096324 | lr 2.1732e-04 | norm: 0.3981 | dt: 113754.27ms | tok/sec: 4608.95
+step   183 | loss: 6.086960 | lr 2.1447e-04 | norm: 0.2921 | dt: 113782.44ms | tok/sec: 4607.81
+step   184 | loss: 6.118384 | lr 2.1164e-04 | norm: 0.3812 | dt: 113741.33ms | tok/sec: 4609.48
+step   185 | loss: 6.165881 | lr 2.0882e-04 | norm: 0.3193 | dt: 113542.56ms | tok/sec: 4617.55
+step   186 | loss: 6.192842 | lr 2.0603e-04 | norm: 0.4353 | dt: 114163.61ms | tok/sec: 4592.43
+step   187 | loss: 6.246624 | lr 2.0324e-04 | norm: 0.3507 | dt: 117636.27ms | tok/sec: 4456.86
+step   188 | loss: 6.207923 | lr 2.0048e-04 | norm: 0.3691 | dt: 114136.07ms | tok/sec: 4593.53
+step   189 | loss: 6.181489 | lr 1.9773e-04 | norm: 0.3554 | dt: 118053.36ms | tok/sec: 4441.11
+step   190 | loss: 6.221642 | lr 1.9500e-04 | norm: 0.2866 | dt: 114299.97ms | tok/sec: 4586.95
+step   191 | loss: 6.183253 | lr 1.9229e-04 | norm: 0.3939 | dt: 118231.82ms | tok/sec: 4434.41
+step   192 | loss: 6.191956 | lr 1.8960e-04 | norm: 0.3064 | dt: 118361.67ms | tok/sec: 4429.54
+step   193 | loss: 6.198623 | lr 1.8692e-04 | norm: 0.3672 | dt: 113879.19ms | tok/sec: 4603.90
+step   194 | loss: 6.131301 | lr 1.8427e-04 | norm: 0.3337 | dt: 118412.94ms | tok/sec: 4427.62
+step   195 | loss: 6.138108 | lr 1.8163e-04 | norm: 0.3443 | dt: 114490.29ms | tok/sec: 4579.32
+step   196 | loss: 6.122670 | lr 1.7902e-04 | norm: 0.3947 | dt: 114307.01ms | tok/sec: 4586.67
+step   197 | loss: 6.153348 | lr 1.7642e-04 | norm: 0.3266 | dt: 118251.31ms | tok/sec: 4433.68
+step   198 | loss: 6.161538 | lr 1.7385e-04 | norm: 0.3044 | dt: 113807.33ms | tok/sec: 4606.80
+step   199 | loss: 6.125771 | lr 1.7130e-04 | norm: 0.4534 | dt: 123558.59ms | tok/sec: 4243.23
+validation loss: 6.1278
+HellaSwag accuracy: 2445/10042=0.2435
+rank 0 sample 0: Hello, I'm a language model,
+-s
+"" or by which I want to make up through an
+- They to have.
+-
+rank 0 sample 1: Hello, I'm a language model, she could be a little ‘g) is still called with a piece that the time is the part of the name
+rank 0 sample 2: Hello, I'm a language model, but it might know of that for in the work, and then not.
+In this, and no longer. To
+rank 0 sample 3: Hello, I'm a language model, or less than that is a good is not less than a healthy with a single level or less. When a major questions
+step   200 | loss: 6.136400 | lr 1.6877e-04 | norm: 0.3247 | dt: 625373.67ms | tok/sec: 838.36
+step   201 | loss: 6.115783 | lr 1.6626e-04 | norm: 0.3094 | dt: 118816.14ms | tok/sec: 4412.60
+step   202 | loss: 6.135611 | lr 1.6377e-04 | norm: 0.3228 | dt: 118655.66ms | tok/sec: 4418.57
+step   203 | loss: 6.113774 | lr 1.6131e-04 | norm: 0.3155 | dt: 118814.37ms | tok/sec: 4412.66
+step   204 | loss: 6.106362 | lr 1.5887e-04 | norm: 0.2909 | dt: 118785.67ms | tok/sec: 4413.73
+step   205 | loss: 6.151310 | lr 1.5645e-04 | norm: 0.3433 | dt: 118562.45ms | tok/sec: 4422.04
+step   206 | loss: 6.135609 | lr 1.5405e-04 | norm: 0.3250 | dt: 119250.11ms | tok/sec: 4396.54
+step   207 | loss: 6.123364 | lr 1.5168e-04 | norm: 0.2973 | dt: 123438.42ms | tok/sec: 4247.36
+step   208 | loss: 6.070897 | lr 1.4933e-04 | norm: 0.3246 | dt: 118496.73ms | tok/sec: 4424.49
+step   209 | loss: 6.013950 | lr 1.4701e-04 | norm: 0.3447 | dt: 118831.02ms | tok/sec: 4412.05
+step   210 | loss: 6.046470 | lr 1.4471e-04 | norm: 0.3840 | dt: 118868.51ms | tok/sec: 4410.66
+step   211 | loss: 6.104539 | lr 1.4244e-04 | norm: 0.4125 | dt: 118641.85ms | tok/sec: 4419.08
+step   212 | loss: 6.107982 | lr 1.4020e-04 | norm: 0.3859 | dt: 119047.69ms | tok/sec: 4404.02
+step   213 | loss: 6.095610 | lr 1.3797e-04 | norm: 0.4322 | dt: 119026.08ms | tok/sec: 4404.82
+step   214 | loss: 6.086975 | lr 1.3578e-04 | norm: 0.3740 | dt: 118731.82ms | tok/sec: 4415.73
+step   215 | loss: 6.098929 | lr 1.3361e-04 | norm: 0.4894 | dt: 119067.58ms | tok/sec: 4403.28
+step   216 | loss: 6.048242 | lr 1.3147e-04 | norm: 0.4090 | dt: 119048.64ms | tok/sec: 4403.98
+step   217 | loss: 6.060906 | lr 1.2935e-04 | norm: 0.3208 | dt: 118496.71ms | tok/sec: 4424.49
+step   218 | loss: 6.034013 | lr 1.2726e-04 | norm: 0.4803 | dt: 118603.67ms | tok/sec: 4420.50
+step   219 | loss: 6.028068 | lr 1.2520e-04 | norm: 0.3300 | dt: 119263.91ms | tok/sec: 4396.03
+step   220 | loss: 5.998350 | lr 1.2317e-04 | norm: 0.3912 | dt: 118470.29ms | tok/sec: 4425.48
+step   221 | loss: 6.003631 | lr 1.2116e-04 | norm: 0.4192 | dt: 123476.10ms | tok/sec: 4246.07
+step   222 | loss: 6.032943 | lr 1.1919e-04 | norm: 0.3362 | dt: 119226.59ms | tok/sec: 4397.41
+step   223 | loss: 5.969610 | lr 1.1724e-04 | norm: 0.4389 | dt: 114646.19ms | tok/sec: 4573.10
+step   224 | loss: 5.977992 | lr 1.1532e-04 | norm: 0.4168 | dt: 118432.87ms | tok/sec: 4426.88
+step   225 | loss: 5.975894 | lr 1.1343e-04 | norm: 0.3175 | dt: 118650.58ms | tok/sec: 4418.76
+step   226 | loss: 5.938071 | lr 1.1157e-04 | norm: 0.4857 | dt: 118456.38ms | tok/sec: 4426.00
+step   227 | loss: 6.052619 | lr 1.0973e-04 | norm: 0.3513 | dt: 118287.00ms | tok/sec: 4432.34
+step   228 | loss: 5.973691 | lr 1.0793e-04 | norm: 0.3920 | dt: 118401.48ms | tok/sec: 4428.05
+step   229 | loss: 5.963811 | lr 1.0616e-04 | norm: 0.5188 | dt: 114592.25ms | tok/sec: 4575.25
+step   230 | loss: 5.990780 | lr 1.0442e-04 | norm: 0.2842 | dt: 118820.60ms | tok/sec: 4412.43
+step   231 | loss: 5.952985 | lr 1.0271e-04 | norm: 0.5254 | dt: 118770.27ms | tok/sec: 4414.30
+step   232 | loss: 6.114742 | lr 1.0103e-04 | norm: 0.4735 | dt: 118595.46ms | tok/sec: 4420.81
+step   233 | loss: 6.120500 | lr 9.9378e-05 | norm: 0.3895 | dt: 118656.35ms | tok/sec: 4418.54
+step   234 | loss: 6.120938 | lr 9.7760e-05 | norm: 0.4806 | dt: 118345.16ms | tok/sec: 4430.16
+step   235 | loss: 6.125032 | lr 9.6173e-05 | norm: 0.3703 | dt: 118965.24ms | tok/sec: 4407.07
+step   236 | loss: 6.142692 | lr 9.4618e-05 | norm: 0.4688 | dt: 118561.38ms | tok/sec: 4422.08
+step   237 | loss: 6.137174 | lr 9.3095e-05 | norm: 0.3538 | dt: 118690.84ms | tok/sec: 4417.26
+step   238 | loss: 6.092083 | lr 9.1604e-05 | norm: 0.5394 | dt: 119328.45ms | tok/sec: 4393.65
+step   239 | loss: 6.079971 | lr 9.0145e-05 | norm: 0.2932 | dt: 118708.20ms | tok/sec: 4416.61
+step   240 | loss: 6.118252 | lr 8.8719e-05 | norm: 0.5116 | dt: 119178.02ms | tok/sec: 4399.20
+step   241 | loss: 6.110950 | lr 8.7326e-05 | norm: 0.4405 | dt: 114600.21ms | tok/sec: 4574.93
+step   242 | loss: 6.107841 | lr 8.5965e-05 | norm: 0.4941 | dt: 118915.36ms | tok/sec: 4408.92
+step   243 | loss: 6.113583 | lr 8.4637e-05 | norm: 0.5727 | dt: 118705.96ms | tok/sec: 4416.69
+step   244 | loss: 6.042404 | lr 8.3343e-05 | norm: 0.4605 | dt: 118863.29ms | tok/sec: 4410.85
+step   245 | loss: 6.003323 | lr 8.2082e-05 | norm: 0.4958 | dt: 123590.53ms | tok/sec: 4242.14
+step   246 | loss: 6.029145 | lr 8.0854e-05 | norm: 0.4459 | dt: 118997.10ms | tok/sec: 4405.89
+step   247 | loss: 6.090569 | lr 7.9660e-05 | norm: 0.2981 | dt: 114959.33ms | tok/sec: 4560.64
+step   248 | loss: 6.070881 | lr 7.8500e-05 | norm: 0.4375 | dt: 118485.36ms | tok/sec: 4424.92
+step   249 | loss: 6.033145 | lr 7.7375e-05 | norm: 0.3322 | dt: 123056.02ms | tok/sec: 4260.56
+validation loss: 6.0351
+HellaSwag accuracy: 2448/10042=0.2438
+rank 0 sample 0: Hello, I'm a language model, then a large-the major
+It allows as a particular time it with other, the great way of a few days
+rank 0 sample 1: Hello, I'm a language model, there he doesn't a "This step, but even with the same man-to.
+The third time, a
+rank 0 sample 2: Hello, I'm a language model, and a wide level of some kind of the amount of the two days.
+There are not a series of a year
+rank 0 sample 3: Hello, I'm a language model, is still a lot of a very useful for up.
+All more than one the one day.
+An "t
+step   250 | loss: 6.069836 | lr 7.6283e-05 | norm: 0.2856 | dt: 611397.22ms | tok/sec: 857.52
+step   251 | loss: 6.015587 | lr 7.5226e-05 | norm: 0.2954 | dt: 114517.03ms | tok/sec: 4578.25
+step   252 | loss: 6.066322 | lr 7.4203e-05 | norm: 0.3663 | dt: 118511.77ms | tok/sec: 4423.93
+step   253 | loss: 6.053365 | lr 7.3215e-05 | norm: 0.2356 | dt: 118608.40ms | tok/sec: 4420.33
+step   254 | loss: 6.064595 | lr 7.2261e-05 | norm: 0.2822 | dt: 118752.56ms | tok/sec: 4414.96
+step   255 | loss: 5.975158 | lr 7.1343e-05 | norm: 0.2652 | dt: 118668.57ms | tok/sec: 4418.09
+step   256 | loss: 6.017227 | lr 7.0459e-05 | norm: 0.2911 | dt: 125828.63ms | tok/sec: 4166.68
+step   257 | loss: 6.004430 | lr 6.9611e-05 | norm: 0.2570 | dt: 125487.77ms | tok/sec: 4178.00
+step   258 | loss: 5.977490 | lr 6.8798e-05 | norm: 0.3009 | dt: 116767.87ms | tok/sec: 4490.00
+step   259 | loss: 6.004863 | lr 6.8020e-05 | norm: 0.2758 | dt: 120343.88ms | tok/sec: 4356.58
+step   260 | loss: 5.942548 | lr 6.7278e-05 | norm: 0.3491 | dt: 126603.73ms | tok/sec: 4141.17
+step   261 | loss: 5.989506 | lr 6.6571e-05 | norm: 0.3276 | dt: 125669.68ms | tok/sec: 4171.95
+step   262 | loss: 5.955642 | lr 6.5900e-05 | norm: 0.2991 | dt: 124669.86ms | tok/sec: 4205.41
+step   263 | loss: 5.944527 | lr 6.5265e-05 | norm: 0.2119 | dt: 126663.21ms | tok/sec: 4139.23
+step   264 | loss: 5.968925 | lr 6.4665e-05 | norm: 0.2907 | dt: 125271.24ms | tok/sec: 4185.22
+step   265 | loss: 5.976481 | lr 6.4102e-05 | norm: 0.2239 | dt: 116610.15ms | tok/sec: 4496.08
+step   266 | loss: 6.015072 | lr 6.3574e-05 | norm: 0.2588 | dt: 118427.32ms | tok/sec: 4427.09
+step   267 | loss: 5.923288 | lr 6.3083e-05 | norm: 0.2439 | dt: 113834.52ms | tok/sec: 4605.70
+step   268 | loss: 5.927419 | lr 6.2628e-05 | norm: 0.2958 | dt: 119927.19ms | tok/sec: 4371.72
+step   269 | loss: 5.992318 | lr 6.2209e-05 | norm: 0.3018 | dt: 114410.83ms | tok/sec: 4582.50
+step   270 | loss: 5.966824 | lr 6.1826e-05 | norm: 0.4308 | dt: 118361.83ms | tok/sec: 4429.54
+step   271 | loss: 5.907930 | lr 6.1479e-05 | norm: 0.3951 | dt: 118371.16ms | tok/sec: 4429.19
+step   272 | loss: 5.916379 | lr 6.1169e-05 | norm: 0.3674 | dt: 118988.51ms | tok/sec: 4406.21
+step   273 | loss: 5.915598 | lr 6.0895e-05 | norm: 0.4005 | dt: 119111.28ms | tok/sec: 4401.67
+step   274 | loss: 5.891269 | lr 6.0658e-05 | norm: 0.2930 | dt: 123735.80ms | tok/sec: 4237.16
+step   275 | loss: 5.964014 | lr 6.0457e-05 | norm: 0.3386 | dt: 118186.68ms | tok/sec: 4436.10
+step   276 | loss: 5.982229 | lr 6.0292e-05 | norm: 0.3568 | dt: 113830.75ms | tok/sec: 4605.86
+step   277 | loss: 5.918247 | lr 6.0164e-05 | norm: 0.3408 | dt: 114059.94ms | tok/sec: 4596.60
+step   278 | loss: 6.061735 | lr 6.0073e-05 | norm: 0.3860 | dt: 118216.00ms | tok/sec: 4435.00
+validation loss: 6.0044
+HellaSwag accuracy: 2457/10042=0.2447
+rank 0 sample 0: Hello, I'm a language model, if you may be used at an image but or your house, then and then to your mind?<|endoftext|>It is to
+rank 0 sample 1: Hello, I'm a language model, in that this is not really. She is not if all the right will also have the whole. So that the story
+rank 0 sample 2: Hello, I'm a language model, a few million per different part of a few of a few percent to have been an adult, and after a major as
+rank 0 sample 3: Hello, I'm a language model, you think you’s not one, from the “This is not get more the problem!
+What?
+step   279 | loss: 6.018563 | lr 6.0018e-05 | norm: 0.4070 | dt: 405079.78ms | tok/sec: 1294.28

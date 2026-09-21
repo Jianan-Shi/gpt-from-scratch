@@ -158,6 +158,69 @@ The ablation, one fix added at a time (same 100k-step budget, same split):
   at every depth. Gradient std moves the same way, which is what "the gain compensates
   for tanh's squashing" actually means.
 
+## 09 — GPT-2 (124M) on FineWeb-Edu
+
+Different corpus, different tokenizer, different unit. The table above is bits per
+**character** on names; GPT-2 is cross-entropy in nats per **BPE token** on
+FineWeb-Edu. The two are not comparable, and converting between them needs a
+characters-per-token ratio that depends on the text, so the conversion below is an
+estimate and nothing in this project is scored on it.
+
+| model | tokens seen | params | val loss (nats/token) | bits/token | HellaSwag |
+|---|---|---|---|---|---|
+| uniform over 50257 | 0 | 0 | 10.825 | 15.62 | 0.25 |
+| ours, step 0 (init) | 0 | 124M | 10.950 | 15.80 | 0.2474 |
+| ours, step 5000 | 328M | 124M | 3.7399* | 5.395 | 0.2602 |
+| **ours, step 9999** | **655M** | 124M | **3.5475** | **5.118** | **0.2634** |
+| OpenAI GPT-2 124M | 100B (WebText) | 124M | **3.2799** | **4.732** | **0.2976** |
+
+\* the starred rows are the values logged during training, measured on the first 327K
+tokens of the val shard. The two bold rows were re-measured afterwards on the first
+1.31M tokens with `09_gpt2/eval_gpt2_baseline.py`, which is the slice Karpathy's
+numbers use. The difference is not noise: the opening of the val shard is easier than
+its average, so the training-time number reads about 0.045 nats low. Trends within a
+run are still valid — every eval uses the same slice — but the absolute value is only
+comparable across models when the slice matches.
+
+At 1.31M tokens, one batch's loss has a standard deviation of 0.227 across batches
+(min 2.53, max 4.36), so 20 batches (82K tokens, the setting inherited from the
+lecture at B=64) leave the estimate swinging by up to 0.21 nats. 80 batches cut that
+to 0.09, 320 batches to about 0.05.
+
+### Findings — GPT-2
+
+- **Update count, not token count, was the binding constraint.** Two runs on the same
+  GPU, compared at the same number of tokens seen (147M):
+
+  | batch | updates at 147M tokens | val loss |
+  |---|---|---|
+  | 2**19 tokens (the lecture's) | 280 | 6.00 |
+  | 2**16 tokens | ~2240 | ~4.15 |
+
+  Identical data, identical FLOPs, 1.85 nats apart. The large batch spends its compute
+  computing a more precise gradient than the early phase of training can use — which is
+  why GPT-3 ramps batch size from 32K to 0.5M tokens rather than starting there. The
+  comparison is not perfectly controlled: at step 280 the first run's cosine schedule
+  had already decayed to its floor, while the second was mid-schedule.
+- **Flash attention is what makes 1024-token context fit in 8GB.** The explicit
+  implementation materialises `(B, nh, T, T)`: at B=16 that is 768 MiB per layer, 9GB
+  across 12 layers, before the 3GB of logits. `F.scaled_dot_product_attention` never
+  builds the matrix; peak memory at B=4 is 5.7GB. A test asserts the two agree.
+- **Out-of-memory does not always raise.** Under WSL2 the driver silently pages VRAM
+  into host RAM instead, so the symptom is a 5x slowdown, not an exception.
+  `torch.cuda.set_per_process_memory_fraction` restores the error. Note it is
+  per-process: two runs at once each stayed under the cap while together exceeding the
+  card, which is exactly how one overnight run took 10 hours instead of 2.
+- **HellaSwag dips below chance before it rises above it.** 0.2474 at init, 0.2368 at
+  step 500, back above 0.25 around step 1500 (val loss ~4.4), 0.2634 at the end. The
+  wrong endings were selected by adversarial filtering to be the ones language models
+  find plausible, so a model that has learned token frequencies and little else is
+  actively misled by them.
+- **Weight tying makes the initial loss look too good if the test is wrong.** With
+  `wte.weight is lm_head.weight`, the residual stream carries `wte[idx]` and
+  `logits = x @ wte.T` peaks at the input token itself. Scoring `targets = inputs` at
+  init gives 4.45 against `ln 128 = 4.85` on a toy config; untying restores 4.85.
+
 ## Reproducibility
 
 - torch 2.6.0+cu124, Python 3.11.15
