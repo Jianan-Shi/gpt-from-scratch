@@ -17,3 +17,9 @@ ng-video-lecture/
 build-nanogpt/
 nanoGPT/
 llm.c/
+
+# HellaSwag 评估数据（原仓库已因 DMCA 下线，不要推到公开仓库）
+09_gpt2/hellaswag/
+
+# 09 的 tinyshakespeare 副本，正本在 data/
+09_gpt2/input.txt
