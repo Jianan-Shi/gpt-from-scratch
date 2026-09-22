@@ -12,6 +12,9 @@ numbers stay comparable across chapters.
 | 03 | MLP, 6-char context | 17,897 | **2.9769 bpc** | 3.5555 bigram |
 | 04 | 6 layers + BatchNorm | 47,024 | 3.0521 bpc | 3.0648 the 03 MLP |
 | 05 | same net, every gradient hand-written | 12,297 | 3.0629 bpc | 3.0648 with autograd |
+| 06 | WaveNet-style tree, 8-char context | 76,579 | **2.8977 bpc** | 2.9769 the 03 MLP |
+| 07 | 6-layer Transformer, tiny Shakespeare | 10.8M | 2.1597 bpc (best) | own corpus, 6.022 uniform |
+| 08 | BPE tokenizer from scratch | — | 3.21 bytes/token @ vocab 1536 | 1.0, raw bytes |
 | 09 | **GPT-2 124M, trained on one RTX 4060 8GB** | 124M | **3.5475 nats/token**, HellaSwag **0.2634** | 3.2799 / 0.2976 — OpenAI's checkpoint, measured here |
 
 Chapters 02–05 are character-level on names, scored in bits per character against a
@@ -27,7 +30,8 @@ nnzh/                 shared utilities (vocab, split, dataset, bpc) — the spli
 03_mlp/               Bengio-style MLP with a fixed context window
 04_batchnorm/         initialisation, activation stats, BatchNorm, diagnostics
 05_backprop/          backprop by hand through the whole net
-07_gpt/               (in progress) Let's build GPT — tiny Shakespeare
+07_gpt/               Let's build GPT — tiny Shakespeare
+08_tokenizer/         byte-pair encoding from scratch
 09_gpt2/              GPT-2 124M: training script, HellaSwag eval, run logs
 experiments/bpc.md    the running scoreboard: bits per character, every model
 figures/
@@ -37,7 +41,7 @@ Setup:
 
 ```bash
 pip install -e .      # editable install of nnzh/, so `from nnzh.data import ...` works anywhere
-pytest                # 52 tests across all chapters
+pytest                # 87 tests across all chapters
 ```
 
 ## 02 — Bigram language model
@@ -156,33 +160,176 @@ closed-form expression cannot be expected to round like an eight-step chain
 
 See [`experiments/bpc.md`](experiments/bpc.md).
 
-## 06 — WaveNet — watched, not built
+## 06 — WaveNet
 
-Lecture 5 of makemore was watched rather than typed along, so there is no runnable
-code and no bpc row for it. [`06_wavenet/guide.ipynb`](06_wavenet/guide.ipynb) keeps
-the notes: the refactor into `Linear` / `BatchNorm1d` / `Tanh` / `Embedding` /
-`Flatten` / `Sequential`, the hierarchical `FlattenConsecutive` tree that replaces the
-flat concatenation, and the one real trap in the chapter — `BatchNorm1d` on a 3-D
-input has to take statistics over `dim=(0, 1)`, not `dim=0`. Writing `dim=0` raises
-nothing, trains fine, and silently gives `running_mean` the shape `(1, T, C)` instead
-of `(1, C)`.
+Two things happen here. The loose tensors of chapters 03–05 become PyTorch-shaped
+layers (`Linear` / `BatchNorm1d` / `Tanh` / `Embedding` / `FlattenConsecutive` /
+`Sequential`), and the flat concatenation of 8 characters becomes a **tree**: each
+level merges adjacent pairs, 8 → 4 → 2 → 1, which is WaveNet's dilated causal
+convolution written as fully-connected layers.
 
-The chapter still matters for what comes next: it pushes the context window from 3 to
-8 by stacking depth, but the window stays fixed and how positions combine stays wired
-into the architecture. That is exactly what attention replaces.
+76,579 params, 200k steps, **2.8977 bpc val** — the best number in the names table,
+0.079 better than the 03 MLP's 2.9769 at context 6.
+
+Beyond the lecture:
+
+- **The tree is not what wins; the context length is.** Matched at the same parameter
+  budget, a flat one-hidden-layer MLP over the same 8 characters scores 2.8992
+  against the tree's 2.8977 — a 0.0015 bpc difference, noise. Cutting the tree's
+  context from 8 to 4 costs 0.031. The chapter frames the hierarchy as the
+  improvement; measured on this dataset it buys nothing that the extra context
+  doesn't already buy. ![tree vs flat](figures/wavenet_tree_vs_flat.png)
+- **The BatchNorm trap is real but not costly here.** A `BatchNorm1d` that takes
+  statistics over `dim=0` instead of `dim=(0, 1)` on 3-D input gives every (T, C)
+  position its own running buffer — shape `(T, C)` instead of `(C,)`, T times more
+  state, silently wrong at `eval()`. Trained with the bug it scores 2.8885 against
+  2.8977 — *better*. Three seeds each, paired: the buggy variant wins every pair by
+  0.005–0.011 bpc (correct 2.8873 / 2.8953 / 2.8977, buggy 2.8823 / 2.8839 / 2.8885),
+  so this is not seed noise — position-wise statistics are simply a little more
+  expressive when `block_size` never changes. The reason to fix it is therefore not
+  the loss: the buffers are the wrong shape, they stop meaning "one mean per channel",
+  and the model breaks the moment `block_size` does change. Nothing raises, ever.
+  A test asserts the shape.
+- **Training loss is noisy enough to mislead at this batch size.** Batch 32 makes
+  single-step loss swing about 0.3 nats; the curves in the figure are averaged over
+  5,000 steps, which is the only reason the two variants can be told apart at all.
+
+Tests assert that `FlattenConsecutive` concatenates the right neighbours in the right
+order, that `n = block_size` reduces it exactly to the 03/04 flat view, that
+BatchNorm's running buffers are per-channel on 3-D input, that eval mode decouples
+examples while train mode does not, and that the tree has one level per halving.
+
+```bash
+cd 06_wavenet
+python wavenet.py                  # 200k steps, ~5 min CPU
+python experiments_wavenet.py      # tree vs flat vs context-4 vs the BN bug
+python experiments_wavenet.py seeds
+```
+
+See [`experiments/bpc.md`](experiments/bpc.md).
 
 ## 07 — Let's build GPT
 
-In progress. New corpus: tiny Shakespeare, 1,115,394 characters, 65-character vocab,
-split 90/10 **by position** — the text is continuous, so shuffling would put both
-halves of a sentence on opposite sides of the split and flatter the validation loss.
-Data plumbing lives in [`nnzh/shakespeare.py`](nnzh/shakespeare.py).
+Self-attention derived in three steps — average the past with two loops, rewrite that
+average as a multiply by a lower-triangular matrix, then replace the uniform weights
+with a softmax over Q·K so the model decides what to attend to. Then multi-head,
+feed-forward, residuals, pre-norm LayerNorm and dropout, stacked six deep.
 
-Losses here are **not comparable to chapters 01-05**: different corpus, and the
-uniform baseline moves from log2(27) = 4.755 to log2(65) = 6.022 bpc. They get their
-own table.
+New corpus: tiny Shakespeare, 1,115,394 characters, 65-character vocab, split 90/10
+**by position** — the text is continuous, so shuffling would put both halves of a
+sentence on opposite sides of the split and flatter the validation loss. Data plumbing
+lives in [`nnzh/shakespeare.py`](nnzh/shakespeare.py).
+
+10.79M params, 5,000 steps, 31 minutes on the RTX 4060. Losses here are **not
+comparable to chapters 01–06**: different corpus, and the uniform baseline moves from
+log2(27) = 4.755 to log2(65) = 6.022 bpc. They get their own table.
+
+| | val nats/char | val bpc |
+|---|---|---|
+| best, step 2000 | **1.4970** | **2.1597** |
+| final, step 5000 | 1.5743 | 2.2713 |
+| the lecture's reported final | 1.4873 | 2.1457 |
+
+Beyond the lecture:
+
+- **The lecture's final number is this run's *best* number.** Val bottoms out at 1.4970
+  around step 2000 — within 0.01 of the 1.4873 the video reports — then climbs for the
+  remaining 3,000 steps while train loss keeps falling to 0.859. Reporting the last
+  step, as the video does, hides that the model has been overfitting for more than half
+  of the run. 1M characters is small for 10.8M parameters; dropout 0.2 slows that down
+  without preventing it. ![training curves](figures/gpt_shakespeare.png)
+- **Scaling the attention logits is not cosmetic.** Without the `1/sqrt(head_size)`
+  factor, softmax at initialisation already concentrates on a single position — mean
+  max-probability rises by more than 0.2 at head_size 64, asserted in a test. That is
+  where "the gradients vanish before training starts" comes from.
+- **Residual correctness is testable without training.** Zero the output projections of
+  both sublayers and a Block must be exactly the identity. A mis-wired residual
+  otherwise shows up only as a model that trains slowly for no visible reason.
+
+Samples after 5,000 steps have the shape of the play — speaker headings, line breaks,
+Elizabethan syntax — and mean nothing:
+
+```
+Second Offend:
+A gallant are you, and till.
+
+First Muservant:
+Fool, then I would by a childish clettes look.
+```
+
+Tests assert that the split is positional and not shuffled, that targets are inputs
+shifted by one, that attention cannot see the future, that attention weights are a
+lower-triangular distribution summing to 1 per row, that the first token attends only
+to itself, that dropout is off in eval, and that generation crops its context to
+`block_size`.
+
+```bash
+cd 07_gpt
+python gpt.py            # 5000 steps, ~30 min on an RTX 4060
+python plot_gpt.py
+```
 
 See [`experiments/bpc.md`](experiments/bpc.md).
+
+## 08 — The GPT tokenizer
+
+Byte-pair encoding from scratch. The tokenizer is a separate artefact from the model:
+its own training set, its own training loop, and the only thing it hands the network
+is a sequence of integers. Chapter 09 uses `tiktoken`'s GPT-2 vocabulary (50257); this
+chapter builds the thing that produces one.
+
+Text encodes to UTF-8 bytes, so the starting vocabulary is 0–255 and nothing is ever
+out-of-vocabulary. Then the most frequent adjacent pair is merged into a new id,
+repeatedly. `BasicTokenizer` does that on the raw stream; `RegexTokenizer` splits the
+text into words / numbers / punctuation / whitespace first (GPT-4's pattern) and merges
+only inside a chunk, plus special-token handling.
+
+Trained on 100K characters of tiny Shakespeare:
+
+| vocab | regex split | no split |
+|---|---|---|
+| 300 | 1.429 | 1.430 |
+| 512 | 2.151 | 2.101 |
+| 1024 | 2.856 | 2.841 |
+| 1536 | 3.205 | **3.282** |
+
+(bytes per token — higher is better compression)
+![compression](figures/bpe_compression.png)
+
+Beyond the lecture:
+
+- **Regex splitting costs compression and buys consistency.** At vocab 1536 the
+  unsplit tokenizer compresses *better* (3.282 vs 3.205 bytes/token) because it is
+  free to merge across boundaries — and that is exactly the problem: it produces 55
+  tokens straddling a letter/punctuation boundary (`b'e '`, `b'US:\n'`), so the same
+  word lands on different tokens depending on the punctuation after it, and the model
+  has to learn it more than once. The regex version produces zero. Both numbers come
+  from a test.
+- **The same tokenizer is not equally efficient in every language.** GPT-2's vocabulary
+  on equivalent text: 5.48 bytes/token for English, 1.89 for Python, **1.46 for
+  Chinese**. Per character it is starker — 66 Chinese characters cost 127 tokens
+  (1.9 tokens each) where 137 English characters cost 25. Same context window, ~10x
+  less text, and API pricing is per token.
+- **Most "LLM can't do X" complaints are tokenizer artefacts**, measured with the
+  GPT-2 vocabulary:
+
+  | | tokens |
+  |---|---|
+  | `strawberry` | `st` `raw` `berry` — the letters are not visible to the model |
+  | `677` / `6773` / `67730` | `677` / `67`+`73` / `677`+`30` — digits chunk arbitrarily |
+  | `hello world` vs `hello world ` | 2 vs 3 tokens; a trailing space changes the input |
+  | `你好` | 4 tokens, each half a character |
+
+Tests assert the merge/stats primitives, round-tripping of arbitrary Unicode including
+emoji (byte-level means no `<unk>`, ever), that encoding replays the training merge
+order, that compression improves monotonically with vocabulary size, that regex
+splitting never merges across categories, and that a `<|endoftext|>` appearing in user
+text raises instead of being silently accepted as a control token.
+
+```bash
+cd 08_tokenizer
+python experiments_bpe.py          # ~2 min
+```
 
 ## 09 — Let's reproduce GPT-2 (124M)
 

@@ -1,0 +1,67 @@
+{
+ "params": 10788929,
+ "train_nats": 0.859210729598999,
+ "val_nats": 1.5743387937545776,
+ "train_bpc": 1.239579058671064,
+ "val_bpc": 2.2712907704288416,
+ "history": [
+  [
+   0,
+   4.222309589385986,
+   4.230581283569336
+  ],
+  [
+   500,
+   1.7332534790039062,
+   1.8859061002731323
+  ],
+  [
+   1000,
+   1.3917378187179565,
+   1.603655219078064
+  ],
+  [
+   1500,
+   1.2712407112121582,
+   1.537583589553833
+  ],
+  [
+   2000,
+   1.1869466304779053,
+   1.4970446825027466
+  ],
+  [
+   2500,
+   1.1240578889846802,
+   1.499946117401123
+  ],
+  [
+   3000,
+   1.072282075881958,
+   1.501121997833252
+  ],
+  [
+   3500,
+   1.0194716453552246,
+   1.5104261636734009
+  ],
+  [
+   4000,
+   0.9661608338356018,
+   1.5271155834197998
+  ],
+  [
+   4500,
+   0.9137978553771973,
+   1.5497585535049438
+  ],
+  [
+   4999,
+   0.859210729598999,
+   1.5743387937545776
+  ]
+ ],
+ "seconds": 1830.926515340805,
+ "device": "cuda",
+ "sample": "\nAnd they bring withal some blow after boason.\nTake night the case star it is unqualined;\nFor lay aneinwoman in that act zolour\nYou shall find your mistress.\n\nSecond Offend:\nA gallant are you, and till.\n\nFirst Muservant:\nFool, then I would by a childish clettes look.\nI pray, tell thee it you, thou art onl--do your pity,\nI'll make a visitation from Leo:\nBut if you both breathe sorrow in your threates,\nOr, to find your former duty and took it:\nSaddle you Edward? wilt thou all not relishes?\nWhy are "
+}

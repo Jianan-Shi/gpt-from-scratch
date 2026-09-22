@@ -1,0 +1,166 @@
+{
+ "sweep": [
+  {
+   "vocab_size": 300,
+   "kind": "regex",
+   "ratio": 1.4289388699951415,
+   "seconds": 1.4255690574645996
+  },
+  {
+   "vocab_size": 300,
+   "kind": "basic",
+   "ratio": 1.4295925661186561,
+   "seconds": 1.136918544769287
+  },
+  {
+   "vocab_size": 512,
+   "kind": "regex",
+   "ratio": 2.1513704229594253,
+   "seconds": 6.421638011932373
+  },
+  {
+   "vocab_size": 512,
+   "kind": "basic",
+   "ratio": 2.1014584121380238,
+   "seconds": 5.0423970222473145
+  },
+  {
+   "vocab_size": 768,
+   "kind": "regex",
+   "ratio": 2.58631837579206,
+   "seconds": 11.29423999786377
+  },
+  {
+   "vocab_size": 768,
+   "kind": "basic",
+   "ratio": 2.5425237090335866,
+   "seconds": 9.14697003364563
+  },
+  {
+   "vocab_size": 1024,
+   "kind": "regex",
+   "ratio": 2.855592678260373,
+   "seconds": 16.535703420639038
+  },
+  {
+   "vocab_size": 1024,
+   "kind": "basic",
+   "ratio": 2.840909090909091,
+   "seconds": 12.575953245162964
+  },
+  {
+   "vocab_size": 1536,
+   "kind": "regex",
+   "ratio": 3.204717343930265,
+   "seconds": 27.536309719085693
+  },
+  {
+   "vocab_size": 1536,
+   "kind": "basic",
+   "ratio": 3.2819166393173616,
+   "seconds": 20.02446985244751
+  }
+ ],
+ "languages": [
+  {
+   "sample": "English",
+   "chars": 137,
+   "bytes": 137,
+   "gpt2_tokens": 25,
+   "gpt2_bytes_per_token": 5.48,
+   "ours_tokens": 60,
+   "ours_bytes_per_token": 2.283333333333333
+  },
+  {
+   "sample": "Chinese",
+   "chars": 66,
+   "bytes": 186,
+   "gpt2_tokens": 127,
+   "gpt2_bytes_per_token": 1.4645669291338583,
+   "ours_tokens": 183,
+   "ours_bytes_per_token": 1.0163934426229508
+  },
+  {
+   "sample": "Python",
+   "chars": 106,
+   "bytes": 106,
+   "gpt2_tokens": 56,
+   "gpt2_bytes_per_token": 1.8928571428571428,
+   "ours_tokens": 76,
+   "ours_bytes_per_token": 1.394736842105263
+  }
+ ],
+ "weirdness": {
+  "前导空格改变一切": {
+   "hello": [
+    "hello"
+   ],
+   " hello": [
+    " hello"
+   ],
+   "Hello": [
+    "Hello"
+   ]
+  },
+  "数字切得没有规律": {
+   "677": [
+    "677"
+   ],
+   "6773": [
+    "67",
+    "73"
+   ],
+   "67730": [
+    "677",
+    "30"
+   ],
+   "1234567": [
+    "123",
+    "45",
+    "67"
+   ]
+  },
+  "行尾空格是另一个 token": {
+   "hello world": [
+    "hello",
+    " world"
+   ],
+   "hello world ": [
+    "hello",
+    " world",
+    " "
+   ]
+  },
+  "拼写任务看不到字母": {
+   "strawberry": [
+    "st",
+    "raw",
+    "berry"
+   ],
+   "ubiquitous": [
+    "ub",
+    "iqu",
+    "itous"
+   ]
+  },
+  "中文按字节碎掉": {
+   "你好": [
+    "�",
+    "�",
+    "�",
+    "�"
+   ],
+   "机器学习": [
+    "�",
+    "�",
+    "�",
+    "�",
+    "�",
+    "�",
+    "�",
+    "�",
+    "�"
+   ]
+  }
+ }
+}

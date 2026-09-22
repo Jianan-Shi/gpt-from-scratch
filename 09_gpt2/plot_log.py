@@ -7,8 +7,8 @@ matplotlib.use("Agg") # write a png, no display needed under WSL
 import matplotlib.pyplot as plt
 
 sz = "124M"
-loss_baseline = 3.2924 # OpenAI GPT-2 (124M) checkpoint val loss on FineWeb-Edu
-hella2_baseline = 0.294463 # HellaSwag for GPT-2 (124M)
+loss_baseline = 3.2799 # OpenAI GPT-2 (124M), measured here by eval_gpt2_baseline.py (Karpathy quotes 3.2924)
+hella2_baseline = 0.2976 # HellaSwag for GPT-2 (124M), measured here (Karpathy quotes 0.294463)
 hella3_baseline = 0.337 # HellaSwag for GPT-3 (124M)
 
 run_dir = sys.argv[1] if len(sys.argv) > 1 else max(glob.glob("log/run_*"), key=os.path.getmtime)

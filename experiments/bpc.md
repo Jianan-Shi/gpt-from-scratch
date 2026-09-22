@@ -24,6 +24,9 @@ side — a bigram-level split would leak `em` into train while `mm` sits in val.
 | deep MLP (6×100, Kaiming, no BN) | 3 | 46,497 | 2.8771 | 3.0399 | 100k steps, batch 32 |
 | deep MLP (6×100, + BatchNorm) | 3 | 47,024 | 2.9516 | **3.0521** | the part-3 configuration |
 | MLP + BN, manual backward | 3 | 12,297 | 2.9794 | 3.0629 | part-4 config; every gradient hand-written |
+| WaveNet tree (8→4→2→1) | 8 | 76,579 | 2.5435 | **2.8977** | 200k steps, batch 32 — best in the table |
+| flat MLP, params matched | 8 | 76,699 | 2.5227 | 2.8992 | same budget, one hidden layer: same score |
+| WaveNet tree | 4 | 43,555 | 2.7341 | 2.9284 | the gain is context length, not the tree |
 
 MLP rows: `n_embd=10`, `n_hidden=200`, 60k steps of minibatch-64 SGD, lr 0.1 → 0.01 at 40k.
 Deep MLP rows: `n_embd=10`, 5 hidden layers of 100 + output layer, 100k steps of
@@ -157,6 +160,58 @@ The ablation, one fix added at a time (same 100k-step budget, same split):
   0.625 → 0.321 layer by layer; gain=5/3 holds 0.76 → 0.66; with BN it is a flat 0.63
   at every depth. Gradient std moves the same way, which is what "the gain compensates
   for tanh's squashing" actually means.
+
+## 07 — Transformer on tiny Shakespeare
+
+Different corpus (1,115,394 characters, 65-char vocab, split 90/10 by position), so
+these numbers do not belong in the names table. Uniform baseline is log2(65) = 6.022.
+
+| model | context | params | train bpc | val bpc | notes |
+|---|---|---|---|---|---|
+| uniform | 0 | 0 | 6.0224 | 6.0224 | log2(65), theoretical |
+| GPT, step 2000 | 256 | 10.79M | 1.7124 | **2.1597** | best val of the run |
+| GPT, step 5000 | 256 | 10.79M | 1.2396 | 2.2713 | final; train still falling |
+
+### Findings — Transformer
+
+- **Validation bottoms out at step 2000 and rises for the remaining 3,000.** Best val
+  is 1.4970 nats/char, within 0.01 of the 1.4873 the lecture reports as its *final*
+  number; ours ends at 1.5743 while train loss falls from 1.187 to 0.859. At 10.8M
+  parameters on 1M characters, dropout 0.2 slows overfitting rather than preventing
+  it, and reporting the last step hides it.
+- **Attention-logit scaling is measurable at init.** Dropping `1/sqrt(head_size)` at
+  head_size 64 raises the mean max-softmax-probability by >0.2, i.e. the distribution
+  is already near one-hot before any training. Asserted in `test_gpt.py`.
+
+## 08 — Byte-pair encoding
+
+Not a model, so no bpc: the metric is bytes per token on the text it was trained on
+(100K characters of tiny Shakespeare). Higher is better compression.
+
+| vocab | regex split | no split | notes |
+|---|---|---|---|
+| 300 | 1.429 | 1.430 | 44 merges barely help |
+| 512 | 2.151 | 2.101 | |
+| 1024 | 2.856 | 2.841 | |
+| 1536 | 3.205 | **3.282** | no-split compresses better — see below |
+
+GPT-2's released vocabulary (50257) on equivalent text: English 5.48 bytes/token,
+Python 1.89, Chinese 1.46.
+
+### Findings — tokenizer
+
+- **Regex splitting trades compression for consistency.** Unsplit BPE wins on bytes
+  per token at vocab 1536 (3.282 vs 3.205) precisely because it may merge across
+  boundaries: it produces 55 tokens straddling a letter/punctuation boundary (`b'e '`,
+  `b'US:\n'`), so a word's identity depends on the punctuation that follows it. The
+  regex version produces zero such tokens. Both counts are asserted in tests.
+- **Cost per character is language-dependent by ~10x.** 66 Chinese characters cost 127
+  GPT-2 tokens (1.92 each); 137 English characters cost 25 (0.18 each). Same context
+  window, same per-token price, an order of magnitude less text.
+- **The standard "LLM can't do X" complaints are tokenizer artefacts**: `strawberry`
+  is `st`+`raw`+`berry` (the letters are not visible), `6773` splits as `67`+`73`
+  while `677` is one token, and a trailing space changes `hello world` from 2 tokens
+  to 3.
 
 ## 09 — GPT-2 (124M) on FineWeb-Edu
 
