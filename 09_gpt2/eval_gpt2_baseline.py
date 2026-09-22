@@ -63,7 +63,8 @@ if __name__ == "__main__":
         import __main__ # checkpoints pickled their config as __main__.GPTConfig
         __main__.GPTConfig = GPTConfig
         ckpt = torch.load(target, weights_only=False)
-        model = GPT(ckpt["config"])
+        cfg = ckpt["config"]
+        model = GPT(cfg if not isinstance(cfg, dict) else GPTConfig(**cfg))
         model.load_state_dict(ckpt["model"])
         print(f"loaded {target} (step {ckpt['step']}, logged val loss {ckpt['val_loss']:.4f})")
     else:

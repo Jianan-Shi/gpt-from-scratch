@@ -2,7 +2,7 @@ import os
 import math
 import time
 import inspect
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -247,6 +247,16 @@ class DataLoaderLite:
         self.tokens = load_tokens(self.shards[self.current_shard])
         self.current_position = self.B * self.T * self.process_rank
 
+    def state_dict(self):
+        # 只有 master 存盘，而各 rank 的位置相差 rank * B * T（见 reset），
+        # 所以恢复时按自己的 rank 加回偏移即可。
+        return {"current_shard": self.current_shard, "current_position": self.current_position}
+
+    def load_state_dict(self, sd, rank_offset=0):
+        self.current_shard = sd["current_shard"]
+        self.tokens = load_tokens(self.shards[self.current_shard])
+        self.current_position = sd["current_position"] + rank_offset
+
     def next_batch(self):
         B, T = self.B, self.T
         buf = self.tokens[self.current_position : self.current_position+B*T+1]
@@ -283,6 +293,77 @@ def get_most_likely_row(tokens, mask, logits):
     # the one with the lowest loss should be the most likely
     pred_norm = avg_loss.argmin().item()
     return pred_norm
+# -----------------------------------------------------------------------------------------------------------------
+# gradient noise scale (McCandlish et al., An Empirical Model of Large-Batch Training)
+#
+# 每个 batch 的梯度 = 全体数据的真实方向 + 这批样本带来的随机偏差。B_simple 就是
+# 两者量级相当时的 batch 大小（按 token 计）：远小于它，方向被噪声淹没；远大于它，
+# 多出来的样本只是在反复确认一个已经清楚的方向。
+#
+# 用两个 batch 大小就能估：小的用第一个 micro step 的梯度，大的用累积完的梯度，
+# 后者 clip_grad_norm_ 本来就返回了。所以额外开销只有一次求范数，没有多余的前反向。
+
+def gradient_noise_scale(g_small_sq, g_big_sq, b_small, b_big):
+    """返回 (|G|^2 的估计, tr(Sigma) 的估计, B_simple)，单位都按 token 算。
+
+    |g_B|^2 的期望是 |G|^2 + tr(Sigma)/B，两个不同的 B 联立即可解出两个未知量。
+    单步估计噪声很大（分母可能为负），所以调用方要对分子分母各做 EMA 再相除。
+    """
+    assert b_big > b_small > 0
+    g2 = (b_big * g_big_sq - b_small * g_small_sq) / (b_big - b_small)
+    s = (g_small_sq - g_big_sq) / (1.0 / b_small - 1.0 / b_big)
+    # 两个估计都必须为正才有意义：g2 <= 0 说明连真实方向都没测出来，
+    # s < 0 说明小 batch 的范数反而更小——纯粹是这一步的噪声，不能用。
+    b_simple = s / g2 if (g2 > 0 and s >= 0) else float("nan")
+    return g2, s, b_simple
+
+
+# -----------------------------------------------------------------------------------------------------------------
+# checkpoints that can actually resume
+#
+# 原版只存权重，机器半夜掉线就得从头再来。续跑还需要：优化器状态（AdamW 的 m/v，
+# 丢了等于重新预热）、数据读到哪了、步数、以及 RNG 状态。
+
+def save_checkpoint(path, *, model, optimizer, step, val_loss, loader_state, meta, keep=2, noise_ema=None):
+    torch.save({
+        "model": model.state_dict(),
+        # asdict, not the dataclass: pickling the object makes the checkpoint loadable
+        # only where GPTConfig is importable (that is why eval_gpt2_baseline.py needed
+        # to graft the class onto __main__). A dict loads anywhere.
+        "config": asdict(model.config),
+        "optimizer": optimizer.state_dict(), # ~1GB for 124M: AdamW keeps two moments per param
+        "step": step,
+        "val_loss": val_loss,
+        "loader": loader_state,
+        "rng": torch.get_rng_state(),
+        "cuda_rng": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        "noise_ema": noise_ema, # else the noise-scale EMA restarts from scratch on every resume
+        "meta": meta, # preset name, world size, batch geometry — checked on resume
+    }, path)
+    prune_checkpoints(os.path.dirname(path), keep)
+    return path
+
+
+def prune_checkpoints(log_dir, keep):
+    """只留最近 keep 个。每个约 1.5GB，一整晚的训练会把盘写满。"""
+    ckpts = sorted(f for f in os.listdir(log_dir) if f.startswith("ckpt_") and f.endswith(".pt"))
+    for stale in ckpts[:-keep] if keep > 0 else ckpts:
+        os.remove(os.path.join(log_dir, stale))
+    return ckpts[-keep:] if keep > 0 else []
+
+
+def find_latest_checkpoint(log_root="log"):
+    """--resume auto 用：拿所有 run 目录里最新的一个 ckpt。"""
+    candidates = []
+    for run in os.listdir(log_root) if os.path.isdir(log_root) else []:
+        run_dir = os.path.join(log_root, run)
+        if not os.path.isdir(run_dir):
+            continue
+        candidates += [os.path.join(run_dir, f) for f in os.listdir(run_dir)
+                       if f.startswith("ckpt_") and f.endswith(".pt")]
+    return max(candidates, key=os.path.getmtime) if candidates else None
+
+
 # -----------------------------------------------------------------------------------------------------------------
 # simple lunch:
 # python gpt2_follow.py
@@ -365,6 +446,9 @@ class Preset:
     use_compile: bool
     memory_fraction: float = None # cap the allocator so WSL raises OOM instead of spilling to host RAM
     T: int = 1024
+    checkpoint_every: int = 1000  # a rented box dying at hour 7 should cost one interval, not the night
+    keep_checkpoints: int = 2     # ~1.5GB each (weights + AdamW moments)
+    noise_every: int = 10         # gradient noise scale: one extra grad-norm every N steps
 
 PRESETS = {
     # one RTX 4060 8GB: 5.7GB peak at B=4, ~3 s/step, ~9h -> 655M tokens
@@ -377,13 +461,15 @@ PRESETS = {
     # 50 steps for the first rented hour: check throughput, checkpointing, DDP
     "smoke": Preset(total_batch_size=2**16, B=4, warmup_steps=5, max_steps=50,
                     eval_interval=25, val_tokens=81_920, use_compile=False,
-                    memory_fraction=0.95),
+                    memory_fraction=0.95, checkpoint_every=25, noise_every=5),
 }
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--preset", default="4060", choices=sorted(PRESETS))
 parser.add_argument("--compile", dest="use_compile", default=None, action=argparse.BooleanOptionalAction,
                     help="override the preset, e.g. --compile with --preset smoke to check the compiled path")
+parser.add_argument("--resume", default=None, metavar="PATH|auto",
+                    help="continue from a checkpoint; writes back into that run's directory")
 args = parser.parse_args()
 preset = PRESETS[args.preset]
 if args.use_compile is not None:
@@ -408,6 +494,20 @@ val_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_w
 
 torch.set_float32_matmul_precision('high')
 
+# [resume] load first: the checkpoint decides which run directory we append to
+resume_path = find_latest_checkpoint() if args.resume == "auto" else args.resume
+resume_ckpt = None
+if resume_path is not None:
+    resume_ckpt = torch.load(resume_path, map_location="cpu", weights_only=False)
+    meta = resume_ckpt["meta"]
+    # the data position is stored per-step and depends on the batch geometry, so a
+    # resume onto a different machine shape would silently re-read or skip tokens
+    assert meta["world_size"] == ddp_world_size, f"checkpoint ran on {meta['world_size']} processes"
+    assert (meta["B"], meta["T"], meta["total_batch_size"]) == (B, T, total_batch_size), \
+        f"batch geometry changed: {meta} vs B={B} T={T} total={total_batch_size}"
+    if master_process:
+        print(f"resuming from {resume_path} at step {resume_ckpt['step']}")
+
 # create model
 model = GPT(GPTConfig(vocab_size=50304))
 model.to(device)
@@ -423,6 +523,8 @@ raw_model = model.module if ddp else model # always contains the "raw" unwrapped
 # version would recompile constantly. val loss keeps a fixed shape and stays compiled.
 # The old code instead skipped both evals whenever compile was on, silently.
 eval_model = raw_model._orig_mod if use_compile else raw_model
+if resume_ckpt is not None:
+    eval_model.load_state_dict(resume_ckpt["model"])
 
 max_lr = 6e-4
 min_lr = max_lr * 0.1
@@ -443,18 +545,39 @@ def get_lr(it):
 # optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
 optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device=device)
 
+start_step = 0
+if resume_ckpt is not None:
+    optimizer.load_state_dict(resume_ckpt["optimizer"]) # AdamW's m/v: dropping them means re-warming up
+    train_loader.load_state_dict(resume_ckpt["loader"], rank_offset=ddp_rank * B * T)
+    torch.set_rng_state(resume_ckpt["rng"])
+    if resume_ckpt["cuda_rng"] is not None and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(resume_ckpt["cuda_rng"])
+    # [off-by-one] the checkpoint is written in the eval block at the *start* of step S:
+    # weights are from the end of S-1 and the loader is positioned at S's first batch.
+    # So "step": S means "about to run S", and resuming re-runs S rather than skipping it.
+    # Getting this wrong silently drops one optimizer step and replays its data.
+    start_step = resume_ckpt["step"]
+
 # create the log directory we will write checkpoints to and log to
 # [keep runs] each run gets its own log/run_YYYYmmdd_HHMMSS/ instead of clearing log/log.txt,
 # and a copy of this script goes in with it so you can tell which settings produced which curves
-log_dir = os.path.join("log", time.strftime("run_%Y%m%d_%H%M%S"))
+if resume_ckpt is not None:
+    log_dir = os.path.dirname(resume_path) # append to the same curve instead of starting a new one
+else:
+    log_dir = os.path.join("log", time.strftime("run_%Y%m%d_%H%M%S"))
 log_file = os.path.join(log_dir, "log.txt")
 if master_process:
-    os.makedirs(log_dir, exist_ok=False) # exist_ok=False: never write into an existing run
+    os.makedirs(log_dir, exist_ok=resume_ckpt is not None) # never write into someone else's run
     import shutil
     shutil.copy(__file__, log_dir)
     print(f"logging to {log_dir}")
 
-for step in range(max_steps):
+# [noise scale] single-step estimates are far too noisy to use directly, so the
+# numerator and denominator are smoothed separately and only then divided.
+noise_ema = (resume_ckpt or {}).get("noise_ema") or {"g2": None, "s": None}
+NOISE_BETA = 0.95
+
+for step in range(start_step, max_steps):
     last_step = (step == max_steps - 1)
 
     # once in a while evaluate our validation loss
@@ -476,16 +599,18 @@ for step in range(max_steps):
             print(f"validation loss: {val_loss_accum.item():.4f}")
             with open(log_file, "a") as f:
                 f.write(f"{step} val {val_loss_accum.item():.4f}\n")
-            if step > 0 and (step % 5000 == 0 or last_step): # [overnight run] saves at step 5000 and the last step
-                # optionally wtite model checkpoints
-                checkpoint_path = os.path.join(log_dir, f"model_{step:05d}.pt")
-                checkpoint = {
-                    'model': eval_model.state_dict(), # not raw_model: compiled keys carry an _orig_mod. prefix
-                    'config': eval_model.config,
-                    'step':step, 
-                    'val_loss': val_loss_accum.item()
-                }
-                torch.save(checkpoint, checkpoint_path)
+            if step > 0 and (step % preset.checkpoint_every == 0 or last_step):
+                save_checkpoint(
+                    os.path.join(log_dir, f"ckpt_{step:06d}.pt"),
+                    model=eval_model, # not raw_model: compiled keys carry an _orig_mod. prefix
+                    optimizer=optimizer,
+                    step=step, # = "about to run this step"; see the resume note above
+                    val_loss=val_loss_accum.item(),
+                    loader_state=train_loader.state_dict(),
+                    meta={"preset": args.preset, "world_size": ddp_world_size,
+                          "B": B, "T": T, "total_batch_size": total_batch_size},
+                    keep=preset.keep_checkpoints,
+                    noise_ema=noise_ema)
 
     # once in a while evaluate hellaswag
     if step % eval_interval == 0 or last_step:
@@ -581,9 +706,30 @@ for step in range(max_steps):
         loss = loss / grad_accum_steps
         loss_accum += loss.detach()
         loss.backward()
+        if micro_step == 0 and step % preset.noise_every == 0:
+            # the small-batch gradient: one micro batch, this rank only (DDP has not
+            # synced yet). It is scaled by 1/grad_accum_steps because the loss was,
+            # so multiply it back out.
+            with torch.no_grad():
+                small_norm = torch.norm(torch.stack([
+                    p.grad.norm() for p in model.parameters() if p.grad is not None])) * grad_accum_steps
     if ddp:
         dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
-    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0) # returns the pre-clip norm
+    b_simple = float("nan")
+    if step % preset.noise_every == 0:
+        # big batch = the whole optimizer step; small batch = one micro batch on one rank
+        g2, s_est, _ = gradient_noise_scale(
+            g_small_sq=(small_norm ** 2).item(), g_big_sq=(norm ** 2).item(),
+            b_small=B * T, b_big=total_batch_size)
+        for key, val in (("g2", g2), ("s", s_est)):
+            prev = noise_ema[key]
+            noise_ema[key] = val if prev is None else NOISE_BETA * prev + (1 - NOISE_BETA) * val
+        if noise_ema["g2"] > 0:
+            b_simple = noise_ema["s"] / noise_ema["g2"]
+        if master_process and math.isfinite(b_simple):
+            with open(log_file, "a") as f:
+                f.write(f"{step} bsimple {b_simple:.1f}\n")
     # determine and set the learning rate for this iteration
     lr = get_lr(step)
     for param_group in optimizer.param_groups:
@@ -596,7 +742,8 @@ for step in range(max_steps):
     tokens_processed = train_loader.B * train_loader.T * grad_accum_steps * ddp_world_size
     tokens_per_sec = tokens_processed / dt
     if master_process:
-        print(f"step {step:5d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}")
+        noise_col = f" | B_simple: {b_simple:,.0f}" if math.isfinite(b_simple) else ""
+        print(f"step {step:5d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}{noise_col}")
         with open(log_file, "a") as f:
             f.write(f"{step} train {loss_accum.item():.6f}\n")
 

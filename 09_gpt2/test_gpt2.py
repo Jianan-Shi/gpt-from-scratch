@@ -14,6 +14,8 @@ _SRC = open(__file__.replace("test_gpt2.py", "gpt2_follow.py")).read()
 _DEFS = {"__name__": "gpt2_defs"}
 exec(_SRC[: _SRC.index("# run the training loop")], _DEFS)
 CausalSelfAttention = _DEFS["CausalSelfAttention"]
+gradient_noise_scale = _DEFS["gradient_noise_scale"]
+save_checkpoint, prune_checkpoints = _DEFS["save_checkpoint"], _DEFS["prune_checkpoints"]
 GPT, GPTConfig = _DEFS["GPT"], _DEFS["GPTConfig"]
 get_most_likely_row = _DEFS["get_most_likely_row"]
 
@@ -237,3 +239,87 @@ def test_evaluation_is_not_gated_on_compile():
     """
     assert "not use_compile" not in _SRC
     assert _SRC.count("eval_model(") >= 2, "变长输入必须走未编译的模型"
+
+
+def test_noise_scale_recovers_a_known_answer():
+    """构造一对满足 E|g_B|^2 = |G|^2 + tr(S)/B 的观测，估计量必须解回原值。"""
+    true_g2, true_s = 4.0, 800.0 # B_simple = 200
+    b_small, b_big = 50, 5000
+    g_small_sq = true_g2 + true_s / b_small
+    g_big_sq = true_g2 + true_s / b_big
+
+    g2, s, b_simple = gradient_noise_scale(g_small_sq, g_big_sq, b_small, b_big)
+
+    assert abs(g2 - true_g2) < 1e-9
+    assert abs(s - true_s) < 1e-9
+    assert abs(b_simple - true_s / true_g2) < 1e-9
+
+
+def test_noise_scale_is_invariant_to_gradient_rescaling():
+    """B_simple 是个比值，整体缩放梯度（比如换 loss 的归一化）不该改变它。"""
+    g_small_sq, g_big_sq, b_small, b_big = 20.0, 4.4, 64, 4096
+    _, _, base = gradient_noise_scale(g_small_sq, g_big_sq, b_small, b_big)
+    _, _, scaled = gradient_noise_scale(9 * g_small_sq, 9 * g_big_sq, b_small, b_big)
+
+    assert abs(base - scaled) < 1e-9
+
+
+def test_noise_scale_flags_an_unusable_estimate():
+    """小 batch 的范数反而更小（纯噪声导致）时，|G|^2 的估计会变成负数，
+    此时必须返回 nan 而不是一个看起来很正常的负 B_simple。"""
+    _, _, b_simple = gradient_noise_scale(g_small_sq=1.0, g_big_sq=9.0, b_small=64, b_big=4096)
+
+    assert math.isnan(b_simple)
+
+
+def _tiny_training_state():
+    torch.manual_seed(0)
+    model = GPT(TINY)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    idx = torch.randint(0, TINY.vocab_size, (2, 16))
+    model(idx, idx)[1].backward()
+    opt.step() # 走一步，AdamW 才会有 m/v 可存
+    return model, opt
+
+
+def test_checkpoint_round_trips_optimizer_state(tmp_path):
+    """只存权重是不够的：丢掉 AdamW 的 m/v，续跑等于重新预热。"""
+    model, opt = _tiny_training_state()
+    path = tmp_path / "ckpt_000010.pt"
+    save_checkpoint(str(path), model=model, optimizer=opt, step=10, val_loss=1.23,
+                    loader_state={"current_shard": 3, "current_position": 4096},
+                    meta={"world_size": 1, "B": 4, "T": 1024, "total_batch_size": 65536})
+
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    fresh_model, fresh_opt = GPT(TINY), None
+    fresh_model.load_state_dict(ckpt["model"])
+    fresh_opt = torch.optim.AdamW(fresh_model.parameters(), lr=1e-3)
+    fresh_opt.load_state_dict(ckpt["optimizer"])
+
+    before = opt.state[opt.param_groups[0]["params"][0]]["exp_avg"]
+    after = fresh_opt.state[fresh_opt.param_groups[0]["params"][0]]["exp_avg"]
+    assert torch.equal(before, after)
+    assert ckpt["step"] == 10
+    assert ckpt["loader"] == {"current_shard": 3, "current_position": 4096}
+
+
+def test_checkpoint_keeps_only_the_most_recent(tmp_path):
+    """每个约 1.5GB，一整夜会把盘写满。"""
+    model, opt = _tiny_training_state()
+    for step in (10, 20, 30, 40):
+        save_checkpoint(str(tmp_path / f"ckpt_{step:06d}.pt"), model=model, optimizer=opt,
+                        step=step, val_loss=1.0, loader_state={}, meta={}, keep=2)
+
+    assert sorted(f.name for f in tmp_path.glob("ckpt_*.pt")) == ["ckpt_000030.pt", "ckpt_000040.pt"]
+
+
+def test_prune_leaves_other_files_alone(tmp_path):
+    (tmp_path / "log.txt").write_text("0 val 10.9\n")
+    (tmp_path / "gpt2_follow.py").write_text("# the script that produced this run\n")
+    for step in (10, 20, 30):
+        (tmp_path / f"ckpt_{step:06d}.pt").write_text("x")
+
+    prune_checkpoints(str(tmp_path), keep=1)
+
+    assert (tmp_path / "log.txt").exists() and (tmp_path / "gpt2_follow.py").exists()
+    assert [f.name for f in tmp_path.glob("ckpt_*.pt")] == ["ckpt_000030.pt"]

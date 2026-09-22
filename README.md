@@ -435,9 +435,30 @@ four decimals, with HellaSwag and samples produced in both. A source-level test
 asserts the `not use_compile` gate never comes back — a whole evaluation being skipped
 raises nothing and so cannot be caught behaviourally.
 
-Known limitations: checkpoints hold model weights but no optimiser state, so they
-cannot resume training exactly (next on the list, before renting); the DDP path is
-written but untested, as this is a one-GPU machine.
+**Checkpoints resume.** A rented box dying at hour 7 should cost one interval, not the
+night, so a checkpoint carries the optimiser state (AdamW's two moments — dropping
+them means re-warming up), the data loader's shard and position, the RNG state and the
+noise-scale EMA, and `--resume auto` picks up the newest one and appends to that run's
+directory. Two land mines here, both found by testing rather than reasoning: the
+checkpoint is written in the eval block at the *start* of a step, so `step: S` means
+"about to run S" and resuming must re-run it — `+1` silently drops an optimizer step
+and replays its data. And the config is stored as a dict, not the dataclass, because
+pickling the object makes the checkpoint loadable only where `GPTConfig` is importable.
+Verified by killing a run at step 25 and resuming: losses match the uninterrupted run
+to 1e-4, which is this GPU's own nondeterminism.
+
+**Gradient noise scale, measured.** The 2^16-vs-2^19 result above is two points; this
+turns it into a curve. B_simple (McCandlish et al.) is the batch size at which the
+gradient's noise and its signal are the same magnitude — below it a batch is mostly
+noise, above it the extra tokens re-confirm a direction already known. It needs two
+gradient norms at different batch sizes, and both are already lying around: the
+accumulated one is what `clip_grad_norm_` returns, and the single-micro-batch one costs
+one extra norm every `noise_every` steps. No extra forward or backward. Plotting it
+against the two batch sizes shows directly where 2^19 stops being wasteful.
+
+Known limitations: the DDP path is written but untested, as this is a one-GPU
+machine — the first rented hour goes to running 1 vs 2 processes at the same seed and
+checking the loss curves land on top of each other.
 
 Reference implementation is `build-nanogpt/` (a local clone, not tracked here) whose
 44 commits are the video's timeline — `git diff` between two of them is faster than
