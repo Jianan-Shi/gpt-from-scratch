@@ -2,7 +2,7 @@ import os
 import math
 import time
 import inspect
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -291,6 +291,8 @@ def get_most_likely_row(tokens, mask, logits):
 # torchrun --standalone --nproc_per_node=1 gpt2_follow.py
 
 # run the training loop
+import argparse
+
 from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
@@ -339,21 +341,67 @@ device_type = "cuda" if device.startswith("cuda") else "cpu"
 torch.manual_seed(1337)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(1337)
-    # WSL2 lets the driver silently spill VRAM into host RAM, which turns an OOM
-    # into a 30x slowdown instead of an error. Cap the allocator so we get a real
-    # OOM and can find the true batch size limit.
-    torch.cuda.set_per_process_memory_fraction(0.95)
+    # the allocator cap moved into the preset (memory_fraction), applied below
 
 enc = tiktoken.get_encoding("gpt2")
 
-total_batch_size = 65536 # [overnight run] 2**16 -> 16 micro steps/step; original 2**19 (~0.5M) gave only 280 updates in the 2h run
-B = 4 # micro batch size
-T = 1024 # sequence length
+# -----------------------------------------------------------------------------------------------------------------
+# [presets] one machine, one entry. Switch with --preset instead of editing the source:
+# editing hyperparameters on a rented, per-hour GPU is how you pay to debug.
+#
+# val_tokens rather than val_loss_steps: the number of *steps* means a different amount
+# of data on every machine (B and world size differ), and the val loss is only comparable
+# across runs when the slice is the same. The 2h run on the 4060 read 0.045 nats low
+# because 20 steps at B=4 scored 82K tokens instead of the intended 10.5M.
+
+@dataclass
+class Preset:
+    total_batch_size: int   # tokens per optimizer step, summed over all processes
+    B: int                  # micro batch size, i.e. what one forward pass holds
+    warmup_steps: int
+    max_steps: int
+    eval_interval: int
+    val_tokens: int         # how much of the val shard each eval scores
+    use_compile: bool
+    memory_fraction: float = None # cap the allocator so WSL raises OOM instead of spilling to host RAM
+    T: int = 1024
+
+PRESETS = {
+    # one RTX 4060 8GB: 5.7GB peak at B=4, ~3 s/step, ~9h -> 655M tokens
+    "4060": Preset(total_batch_size=2**16, B=4, warmup_steps=300, max_steps=10_000,
+                   eval_interval=500, val_tokens=327_680, use_compile=False,
+                   memory_fraction=0.95),
+    # the original recipe: 2 x A800-80G, B=64, grad_accum 4, one epoch of 10B tokens
+    "a800": Preset(total_batch_size=2**19, B=64, warmup_steps=715, max_steps=19_073,
+                   eval_interval=250, val_tokens=10_485_760, use_compile=True),
+    # 50 steps for the first rented hour: check throughput, checkpointing, DDP
+    "smoke": Preset(total_batch_size=2**16, B=4, warmup_steps=5, max_steps=50,
+                    eval_interval=25, val_tokens=81_920, use_compile=False,
+                    memory_fraction=0.95),
+}
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--preset", default="4060", choices=sorted(PRESETS))
+parser.add_argument("--compile", dest="use_compile", default=None, action=argparse.BooleanOptionalAction,
+                    help="override the preset, e.g. --compile with --preset smoke to check the compiled path")
+args = parser.parse_args()
+preset = PRESETS[args.preset]
+if args.use_compile is not None:
+    preset = replace(preset, use_compile=args.use_compile)
+
+total_batch_size, B, T = preset.total_batch_size, preset.B, preset.T
+warmup_steps, max_steps = preset.warmup_steps, preset.max_steps
+eval_interval, use_compile = preset.eval_interval, preset.use_compile
 assert total_batch_size % (B * T * ddp_world_size) == 0, "make sure total_batch_size is divisible by B*T*ddp_world_size"
 grad_accum_steps = total_batch_size // (B * T * ddp_world_size)
+val_loss_steps = max(1, preset.val_tokens // (B * T * ddp_world_size)) # per process
+if preset.memory_fraction is not None and device_type == "cuda":
+    torch.cuda.set_per_process_memory_fraction(preset.memory_fraction)
 if master_process:
+    print(f"preset: {args.preset}")
     print(f"total desired batch size: {total_batch_size}")
     print(f"=> calculated gradient accumulation steps: {grad_accum_steps}")
+    print(f"=> val loss over {val_loss_steps * B * T * ddp_world_size:,} tokens ({val_loss_steps} steps/process)")
 
 train_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split="train")
 val_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split="val")
@@ -363,23 +411,21 @@ torch.set_float32_matmul_precision('high')
 # create model
 model = GPT(GPTConfig(vocab_size=50304))
 model.to(device)
-use_compile = False # torch.compile interferes with HellaSwag eval and Generation. TODO fix
 if use_compile:
     model = torch.compile(model)
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
 raw_model = model.module if ddp else model # always contains the "raw" unwrapped model
+# [compile] torch.compile returns an OptimizedModule wrapper; ._orig_mod is the original
+# model and *shares the same parameters*, so this costs no memory and is never stale.
+# Anything with a changing input shape goes through eval_model: HellaSwag feeds a
+# different T per example and generation grows T by one each step, so the compiled
+# version would recompile constantly. val loss keeps a fixed shape and stays compiled.
+# The old code instead skipped both evals whenever compile was on, silently.
+eval_model = raw_model._orig_mod if use_compile else raw_model
 
 max_lr = 6e-4
 min_lr = max_lr * 0.1
-# [overnight run on RTX 4060, ~9h] measured 184 ms per micro step (B=4, T=1024) -> ~3 s/step
-# at 16 micro steps, plus ~75 s per eval round (HellaSwag ~64 s).
-# 10000 steps * ~3 s ~= 8.4 h, 21 eval rounds ~= 26 min -> ~9 h total, ~655M tokens seen.
-# Previous 2h run: total_batch_size=2**19, warmup_steps=10, max_steps=280, eval_interval=50
-# Original (8xA100, 1 epoch of 10B tokens): warmup_steps = 715, max_steps = 19073
-warmup_steps = 300 # 3% of max_steps (~20M tokens), a bit longer since smaller batches give noisier grads
-max_steps = 10000
-eval_interval = 500 # val loss / HellaSwag / samples every N steps (original: 250); keeps eval overhead ~5%
 def get_lr(it):
     # 1) linear warmup for warmup_iters steps
     if it < warmup_steps:
@@ -409,7 +455,6 @@ if master_process:
     print(f"logging to {log_dir}")
 
 for step in range(max_steps):
-    t0 = time.time()
     last_step = (step == max_steps - 1)
 
     # once in a while evaluate our validation loss
@@ -418,8 +463,7 @@ for step in range(max_steps):
         val_loader.reset()
         with torch.no_grad():
             val_loss_accum = 0.0
-            val_loss_steps = 80 # [overnight run] 20 was sized for B=64; at B=4 that's only 82K tokens, too noisy
-            for _ in range(val_loss_steps):
+            for _ in range(val_loss_steps): # from preset.val_tokens, see above
                 x, y = val_loader.next_batch()
                 x, y = x.to(device), y.to(device)
                 with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
@@ -436,15 +480,15 @@ for step in range(max_steps):
                 # optionally wtite model checkpoints
                 checkpoint_path = os.path.join(log_dir, f"model_{step:05d}.pt")
                 checkpoint = {
-                    'model': raw_model.state_dict(), 
-                    'config': raw_model.config,
+                    'model': eval_model.state_dict(), # not raw_model: compiled keys carry an _orig_mod. prefix
+                    'config': eval_model.config,
                     'step':step, 
                     'val_loss': val_loss_accum.item()
                 }
                 torch.save(checkpoint, checkpoint_path)
 
     # once in a while evaluate hellaswag
-    if (step % eval_interval == 0 or last_step) and (not use_compile):
+    if step % eval_interval == 0 or last_step:
         num_correct_norm = 0
         num_total = 0
         for i, example in enumerate(iterate_examples("val")):
@@ -458,7 +502,7 @@ for step in range(max_steps):
             # get the logits
             with torch.no_grad():
                 with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
-                    logits, loss = model(tokens)
+                    logits, loss = eval_model(tokens) # uncompiled: T varies per example
                 pred_norm = get_most_likely_row(tokens, mask, logits)
             num_total += 1
             num_correct_norm += int(pred_norm == label)
@@ -477,7 +521,7 @@ for step in range(max_steps):
                 f.write(f"{step} hella {acc_norm:.4f}\n")
 
     # once in a while generate from the model (except step 0, which is noise)
-    if ((step > 0 and step % eval_interval == 0) or last_step) and (not use_compile):
+    if (step > 0 and step % eval_interval == 0) or last_step:
         model.eval()
         num_return_sequences = 4
         max_length = 32
@@ -491,7 +535,7 @@ for step in range(max_steps):
             # forward the model to get the logits
             with torch.no_grad():
                 with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
-                    logits, loss = model(xgen) # (B, T, vocab_size)
+                    logits, loss = eval_model(xgen) # uncompiled: T grows by one each step
                 # take the logits at the last position
                 logits = logits[:, -1, :] # (B, vocab_size)
                 # get the probabilities
@@ -513,6 +557,10 @@ for step in range(max_steps):
             print(f"rank {ddp_rank} sample {i}: {decoded}")
 
     # training loop
+    # [timing] t0 starts here, not at the top of the step: on eval steps the old
+    # placement folded the ~95 s of val + HellaSwag + sampling into dt, reporting
+    # 650 tok/s for a step that actually ran at 22,000.
+    t0 = time.time()
     model.train()
     optimizer.zero_grad()
     loss_accum = 0.0

@@ -17,13 +17,20 @@ CausalSelfAttention = _DEFS["CausalSelfAttention"]
 GPT, GPTConfig = _DEFS["GPT"], _DEFS["GPTConfig"]
 get_most_likely_row = _DEFS["get_most_likely_row"]
 
-# the learning-rate schedule sits below the DDP setup, so grab just that slice
-_LR = {"math": math}
+# the preset table and the lr schedule both sit below the DDP setup
+from dataclasses import dataclass  # noqa: E402  (the exec'd slice needs it)
+_P = {"dataclass": dataclass}
+exec(_SRC[_SRC.index("@dataclass\nclass Preset") : _SRC.index("parser = argparse")], _P)
+PRESETS = _P["PRESETS"]
+
+# get_lr reads warmup_steps/max_steps as globals; they come from the chosen preset
+WARMUP_STEPS, MAX_STEPS = PRESETS["4060"].warmup_steps, PRESETS["4060"].max_steps
+_LR = {"math": math, "warmup_steps": WARMUP_STEPS, "max_steps": MAX_STEPS}
 exec(_SRC[_SRC.index("max_lr = 6e-4") : _SRC.index("# optimize!")], _LR)
 get_lr, MAX_LR, MIN_LR = _LR["get_lr"], _LR["max_lr"], _LR["min_lr"]
-WARMUP_STEPS, MAX_STEPS = _LR["warmup_steps"], _LR["max_steps"]
 
 TINY = GPTConfig(block_size=64, vocab_size=128, n_layer=2, n_head=2, n_embd=32)
+
 
 
 def test_flash_attention_matches_the_manual_implementation():
@@ -186,3 +193,47 @@ def test_forward_rejects_sequences_longer_than_block_size():
     except AssertionError:
         return
     raise AssertionError("超过 block_size 时必须报错，位置嵌入没有这么多行")
+
+
+def test_every_preset_divides_into_whole_micro_steps():
+    """total_batch_size 必须被 B*T*world 整除，否则梯度累积的步数对不上。"""
+    for name, p in PRESETS.items():
+        for world in (1, 2, 8):
+            tokens_per_micro = p.B * p.T * world
+            if p.total_batch_size % tokens_per_micro:
+                continue # 这个 world size 用不了，但不能是 1 卡就不行
+            assert p.total_batch_size // tokens_per_micro >= 1, name
+        assert p.total_batch_size % (p.B * p.T) == 0, f"{name} 连单卡都不整除"
+
+
+def test_every_preset_scores_at_least_one_val_batch():
+    for name, p in PRESETS.items():
+        for world in (1, 2, 8):
+            assert max(1, p.val_tokens // (p.B * p.T * world)) >= 1, name
+
+
+def test_a800_preset_is_the_original_recipe():
+    """租卡那一档必须是视频里的配方，不能把 4060 的应急参数带上去。"""
+    p = PRESETS["a800"]
+
+    assert p.total_batch_size == 2**19 # 0.5M tokens, the GPT-3 paper's batch
+    assert p.B == 64 and p.T == 1024
+    assert p.warmup_steps == 715 and p.max_steps == 19_073 # ~1 epoch of 10B tokens
+    assert p.use_compile is True
+    assert p.memory_fraction is None, "显存上限是 WSL 的权宜之计，不该带到租的卡上"
+
+
+def test_val_slice_matches_the_original_on_two_cards():
+    """原版口径是 20 步 x B=64 x 1024 x 8 卡 = 1050 万 token。"""
+    p = PRESETS["a800"]
+    assert p.val_tokens == 20 * 64 * 1024 * 8
+    assert p.val_tokens // (p.B * p.T * 2) == 80 # 2 卡时每进程 80 步
+
+
+def test_evaluation_is_not_gated_on_compile():
+    """HellaSwag 和采样曾经被 `(not use_compile)` 直接跳过，而且不报错。
+
+    这是个源码级断言，因为要防的就是"这段代码被悄悄跳过"——行为测不出来。
+    """
+    assert "not use_compile" not in _SRC
+    assert _SRC.count("eval_model(") >= 2, "变长输入必须走未编译的模型"

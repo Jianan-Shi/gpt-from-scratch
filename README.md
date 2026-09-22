@@ -416,10 +416,28 @@ produced it. Data is not in the repo: FineWeb-Edu shards come from
 `build-nanogpt/fineweb.py` (~10B tokens, 99 shards, tracked via `data_root` in
 `gpt2_follow.py`), and HellaSwag downloads on first use.
 
-Known limitations: `torch.compile` is off because it interferes with HellaSwag eval and
-generation; checkpoints hold model weights but no optimiser state, so they cannot
-resume training exactly; the DDP path is written but untested, as this is a one-GPU
-machine.
+**Presets, not edits.** `--preset {4060,a800,smoke}` holds the per-machine settings
+(batch, micro-batch, schedule, compile, allocator cap) so moving to rented hardware is
+a flag, not six edits in the source. The eval slice is specified in *tokens*
+(`val_tokens`), not steps, because the same step count scores a different amount of
+data on every machine — which is exactly how the 2h run's val loss came out 0.045 low.
+A test asserts the `a800` preset is the original recipe (2^19, B=64, warmup 715,
+19073 steps) and carries none of the 4060's workarounds.
+
+**`torch.compile` is on for the rented preset, and evaluation survives it.** The old
+code skipped HellaSwag and sampling entirely whenever compile was on — silently, via
+`(not use_compile)`. Compile specialises on input shape, and both of those change
+shape constantly (a different T per HellaSwag example, T+1 per generated token), so
+they now run through `raw_model._orig_mod`, the uncompiled view that shares the same
+parameters; val loss keeps its fixed shape and stays compiled. Measured on the 4060,
+50 steps: **22,500 tok/s uncompiled vs 27,150 compiled (1.21x)**, losses agreeing to
+four decimals, with HellaSwag and samples produced in both. A source-level test
+asserts the `not use_compile` gate never comes back — a whole evaluation being skipped
+raises nothing and so cannot be caught behaviourally.
+
+Known limitations: checkpoints hold model weights but no optimiser state, so they
+cannot resume training exactly (next on the list, before renting); the DDP path is
+written but untested, as this is a one-GPU machine.
 
 Reference implementation is `build-nanogpt/` (a local clone, not tracked here) whose
 44 commits are the video's timeline — `git diff` between two of them is faster than
