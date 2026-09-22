@@ -323,3 +323,14 @@ def test_prune_leaves_other_files_alone(tmp_path):
 
     assert (tmp_path / "log.txt").exists() and (tmp_path / "gpt2_follow.py").exists()
     assert [f.name for f in tmp_path.glob("ckpt_*.pt")] == ["ckpt_000030.pt"]
+
+
+def test_4090_preset_keeps_the_recipe_and_fits_24gb():
+    """24GB 装不下 B=64，但配方不变：只是累积步数从 4 变 16，两者数学等价。"""
+    p, original = PRESETS["4090x2"], PRESETS["a800"]
+
+    assert p.total_batch_size == original.total_batch_size == 2**19
+    assert (p.warmup_steps, p.max_steps) == (original.warmup_steps, original.max_steps)
+    assert p.val_tokens == original.val_tokens # 同一把尺子，才和基线可比
+    assert p.B == 16 and p.total_batch_size % (p.B * p.T * 2) == 0
+    assert p.total_batch_size // (p.B * p.T * 2) == 16 # 2 卡，每卡累积 16 次

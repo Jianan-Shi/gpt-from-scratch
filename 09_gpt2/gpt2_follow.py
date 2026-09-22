@@ -458,6 +458,13 @@ PRESETS = {
     # the original recipe: 2 x A800-80G, B=64, grad_accum 4, one epoch of 10B tokens
     "a800": Preset(total_batch_size=2**19, B=64, warmup_steps=715, max_steps=19_073,
                    eval_interval=250, val_tokens=10_485_760, use_compile=True),
+    # 2 x RTX 4090-24G: same recipe, but 24GB only fits B=16, so grad_accum goes 4 -> 16.
+    # Gradient accumulation is numerically identical to one big batch, just slower, so
+    # total_batch_size stays at the GPT-3 paper's 2**19 and nothing else changes.
+    # Estimated 16.9GB at B=16 from the 4060's measured 5.72GB at B=4 — confirm with
+    # --preset smoke before starting the long run, and drop to 12 if it is tight.
+    "4090x2": Preset(total_batch_size=2**19, B=16, warmup_steps=715, max_steps=19_073,
+                     eval_interval=250, val_tokens=10_485_760, use_compile=True),
     # 50 steps for the first rented hour: check throughput, checkpointing, DDP
     "smoke": Preset(total_batch_size=2**16, B=4, warmup_steps=5, max_steps=50,
                     eval_interval=25, val_tokens=81_920, use_compile=False,
