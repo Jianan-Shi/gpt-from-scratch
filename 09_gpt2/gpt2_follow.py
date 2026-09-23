@@ -242,8 +242,10 @@ class DataLoaderLite:
         shards = [os.path.join(data_root, s) for s in shards]
         self.shards = shards
         assert len(shards) > 0, f"no shards found for split {split}"
+        # uint16 tokens plus a small npy header: close enough to count tokens from size
+        self.total_tokens = sum(os.path.getsize(s) // 2 for s in shards)
         if master_process:
-            print(f"found {len(shards)} shards for split {split}")
+            print(f"found {len(shards)} shards for split {split} ({self.total_tokens:,} tokens)")
         self.reset() # [cleanup] the shard/position init lives only in reset()
 
     def reset(self):
@@ -510,6 +512,17 @@ if master_process:
     print(f"=> val loss over {val_loss_steps * B * T * ddp_world_size:,} tokens ({val_loss_steps} steps/process)")
 
 train_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split="train")
+# [guard] the loader wraps silently at the end of the last shard, so a run with too few
+# shards is not a short run — it is the same tokens over and over. Karpathy's recipe is
+# one epoch of 10B; a partial download turns that into 100 epochs of 100M without a word.
+tokens_needed = max_steps * total_batch_size
+epochs = tokens_needed / train_loader.total_tokens
+if master_process:
+    print(f"=> {tokens_needed:,} tokens needed, {train_loader.total_tokens:,} available "
+          f"=> {epochs:.2f} epochs")
+    if epochs > 1.05:
+        print(f"!! WARNING: this run repeats the data {epochs:.1f}x. For the 10B baseline "
+              f"you want ~100 shards; run prep_shards.py or copy them in.")
 val_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split="val")
 
 torch.set_float32_matmul_precision('high')
