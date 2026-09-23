@@ -526,6 +526,10 @@ parser.add_argument("--resume", default=None, metavar="PATH|auto",
 # overrides for shakedown runs: use the real batch geometry of a preset but stop early,
 # e.g. --preset 4090x2 --max-steps 20 measures true peak memory and throughput in a minute
 parser.add_argument("--max-steps", type=int, default=None)
+# B is the micro batch, not the batch: total_batch_size stays put and grad_accum_steps
+# absorbs the change, so this trades kernel-launch overhead against peak memory and
+# changes nothing about the math.
+parser.add_argument("--micro-batch", "-B", type=int, default=None)
 parser.add_argument("--warmup-steps", type=int, default=None,
                     help="keep it near 3.75%% of max-steps, as in the original 715/19073")
 # The data order is fixed by the loader, so --seed varies initialisation only. That is
@@ -539,6 +543,8 @@ args = parser.parse_args()
 preset = PRESETS[args.preset]
 if args.use_compile is not None:
     preset = replace(preset, use_compile=args.use_compile)
+if args.micro_batch is not None:
+    preset = replace(preset, B=args.micro_batch)
 if args.max_steps is not None:
     preset = replace(preset, max_steps=args.max_steps)
 if args.warmup_steps is not None:
