@@ -10,6 +10,100 @@ from hellaswag import render_example, iterate_examples
 
 # -----------------------------------------------------------------------------
 
+def zeropower_via_newtonschulz5(G, steps=5, eps=1e-7):
+    """把矩阵 G 的奇异值全部拉到 1 附近，方向不变——也就是"正交化"。
+
+    做法是 Newton-Schulz 迭代：X <- a*X + b*(X X^T)X + c*(X X^T)^2 X。
+    这组系数 (3.4445, -4.7750, 2.0315) 是 Keller Jordan 拟合出来的，只用 5 次迭代
+    就能把奇异值收进 [0.7, 1.3]，而且全程只有矩阵乘法，在 GPU 上比真正做 SVD 快几个
+    数量级。收敛得不精确是故意的：更新方向对了就够，不需要严格的正交矩阵。
+
+    为什么要正交化：梯度矩阵常常被少数几个方向主导（奇异值差几个数量级），于是
+    更新几乎都花在那几个方向上，其余方向学得极慢。正交化把所有方向的步长拉平，
+    等于"每个方向都走同样远"。
+    """
+    assert G.ndim == 2
+    a, b, c = 3.4445, -4.7750, 2.0315
+    X = G.bfloat16() # 迭代对精度不敏感，bf16 足够且快
+    X = X / (X.norm() + eps) # 先归一化，保证迭代收敛
+    transposed = G.size(0) > G.size(1)
+    if transposed:
+        X = X.T # 让短边在前，矩阵乘法便宜一些
+    for _ in range(steps):
+        A = X @ X.T
+        X = a * X + (b * A + c * A @ A) @ X
+    if transposed:
+        X = X.T
+    return X.to(G.dtype)
+
+
+class Muon(torch.optim.Optimizer):
+    """MomentUm Orthogonalized by Newton-schulz (Keller Jordan, 2024)。
+
+    和 AdamW 的区别只在一步：算出带动量的梯度之后，**先正交化再更新**。
+    AdamW 是逐元素地按历史梯度大小缩放；Muon 是把整个矩阵的更新方向拉平。
+
+    只适用于 2 维参数（矩阵）。嵌入表和 lm_head 虽然也是 2 维，但它们的每一行是
+    独立的 token，"矩阵的奇异值"没有对应的意义，所以按作者的做法仍然交给 AdamW。
+    归一化层的 gain、bias 是 1 维，同理。
+
+    学习率不能沿用 AdamW 的：正交化之后更新的尺度完全不同，典型值是 0.02 量级，
+    比 6e-4 大三十倍。这也是它最容易被误判的地方——直接套用 AdamW 的学习率，
+    结论只会是"Muon 不行"。
+    """
+
+    def __init__(self, params, lr=0.02, momentum=0.95, nesterov=True, ns_steps=5):
+        super().__init__(params, dict(lr=lr, momentum=momentum, nesterov=nesterov, ns_steps=ns_steps))
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = closure() if closure is not None else None
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                state = self.state[p]
+                if "momentum_buffer" not in state:
+                    state["momentum_buffer"] = torch.zeros_like(p.grad)
+                buf = state["momentum_buffer"]
+                buf.lerp_(p.grad, 1 - group["momentum"])
+                update = p.grad.lerp(buf, group["momentum"]) if group["nesterov"] else buf
+                update = zeropower_via_newtonschulz5(update, steps=group["ns_steps"])
+                # 非方阵时按边长比缩放，让每个元素的更新幅度和方阵情形一致
+                scale = max(1.0, p.size(0) / p.size(1)) ** 0.5
+                p.add_(update, alpha=-group["lr"] * scale)
+        return loss
+
+
+class MultiOptimizer:
+    """把多个优化器当成一个用：Muon 管矩阵，AdamW 管嵌入和 1 维参数。
+
+    训练循环、checkpoint、学习率调度都只认一个对象，所以这里补齐它们用到的接口。
+    """
+
+    def __init__(self, optimizers):
+        self.optimizers = optimizers
+
+    @property
+    def param_groups(self):
+        return [g for opt in self.optimizers for g in opt.param_groups]
+
+    def zero_grad(self, *args, **kwargs):
+        for opt in self.optimizers:
+            opt.zero_grad(*args, **kwargs)
+
+    def step(self):
+        for opt in self.optimizers:
+            opt.step()
+
+    def state_dict(self):
+        return {"multi": [opt.state_dict() for opt in self.optimizers]}
+
+    def load_state_dict(self, sd):
+        for opt, opt_sd in zip(self.optimizers, sd["multi"]):
+            opt.load_state_dict(opt_sd)
+
+
 def rope_cache(head_size, block_size, base=10000.0):
     """预先算好每个位置、每个频率的 cos 和 sin，形状都是 (block_size, head_size)。
 
@@ -263,6 +357,8 @@ class GPTConfig:
     qk_norm: bool = False   # normalise q and k before the dot product
     n_kv_head: int = None   # None = one K/V per query head (standard MHA)
     pos: str = "learned"    # learned | rope
+    optimizer: str = "adamw" # adamw | muon
+    muon_lr: float = 0.02    # Muon 的更新经过正交化，尺度和 AdamW 完全不同
 
 class GPT(nn.Module):
 
@@ -398,8 +494,34 @@ class GPT(nn.Module):
         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and 'cuda' in device
         print(f"using fused AdamW: {use_fused}")
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
-        return optimizer
+        # base_lr 让调度器知道每组的"满速"学习率：Muon 的量级和 AdamW 差三十倍，
+        # 而余弦调度给出的是一个 0~1 的相对进度，两者相乘才对。
+        for g in optim_groups:
+            g.setdefault("base_lr", learning_rate)
+        adamw = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
+        if self.config.optimizer != "muon":
+            return adamw
+
+        # 把 block 里的 2 维权重交给 Muon，其余（嵌入、lm_head、norm、bias）留给 AdamW。
+        # 注意 wte 和 lm_head 是同一个张量（权重共享），只能出现在一处。
+        muon_names = {n for n, p in param_dict.items()
+                      if p.dim() == 2 and n.startswith("transformer.h.")}
+        muon_params = [param_dict[n] for n in sorted(muon_names)]
+        rest = [p for n, p in param_dict.items() if n not in muon_names]
+        adamw_groups = [
+            {"params": [p for p in rest if p.dim() >= 2], "weight_decay": weight_decay,
+             "base_lr": learning_rate},
+            {"params": [p for p in rest if p.dim() < 2], "weight_decay": 0.0,
+             "base_lr": learning_rate},
+        ]
+        muon = Muon(muon_params, lr=self.config.muon_lr)
+        muon.param_groups[0]["base_lr"] = self.config.muon_lr
+        print(f"Muon: {len(muon_params)} matrices, {sum(p.numel() for p in muon_params):,} params "
+              f"at lr {self.config.muon_lr}; AdamW keeps the rest at lr {learning_rate}")
+        return MultiOptimizer([
+            muon,
+            torch.optim.AdamW(adamw_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=use_fused),
+        ])
 
 
 
@@ -691,6 +813,8 @@ parser.add_argument("--mlp", choices=["gelu", "swiglu"], default=None)
 parser.add_argument("--qk-norm", dest="qk_norm", default=None, action=argparse.BooleanOptionalAction)
 parser.add_argument("--n-kv-head", dest="n_kv_head", type=int, default=None)
 parser.add_argument("--pos", choices=["learned", "rope"], default=None)
+parser.add_argument("--optimizer", choices=["adamw", "muon"], default=None)
+parser.add_argument("--muon-lr", dest="muon_lr", type=float, default=None)
 parser.add_argument("--seed", type=int, default=1337)
 parser.add_argument("--tag", default=None, help="appended to the run directory name")
 parser.add_argument("--eval-interval", type=int, default=None)
@@ -762,7 +886,8 @@ if resume_path is not None:
 # create model
 arch = {k: v for k, v in (("norm", args.norm), ("mlp", args.mlp),
                           ("qk_norm", args.qk_norm), ("n_kv_head", args.n_kv_head),
-                          ("pos", args.pos))
+                          ("pos", args.pos), ("optimizer", args.optimizer),
+                          ("muon_lr", args.muon_lr))
         if v is not None}
 if master_process and arch:
     print(f"architecture overrides: {arch}")
@@ -840,6 +965,7 @@ if master_process:
 # [noise scale] single-step estimates are far too noisy to use directly, so the
 # numerator and denominator are smoothed separately and only then divided.
 noise_ema = (resume_ckpt or {}).get("noise_ema") or {"g2": None, "s": None}
+dt_ema = None # smoothed step time, for the ETA
 NOISE_BETA = 0.95
 
 for step in range(start_step, max_steps):
@@ -998,7 +1124,8 @@ for step in range(start_step, max_steps):
     # determine and set the learning rate for this iteration
     lr = get_lr(step)
     for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+        # 余弦调度给的是相对进度；每组按自己的 base_lr 放大（Muon 和 AdamW 差三十倍）
+        param_group['lr'] = lr / max_lr * param_group.get('base_lr', max_lr)
     optimizer.step()
     if device_type == "cuda":
         torch.cuda.synchronize() # [fix] wait for the GPU; guarded so CPU/MPS runs don't crash
@@ -1007,11 +1134,16 @@ for step in range(start_step, max_steps):
     tokens_processed = train_loader.B * train_loader.T * grad_accum_steps * ddp_world_size
     tokens_per_sec = tokens_processed / dt
     if master_process:
+        # ETA from a smoothed step time. Eval steps are excluded because t0 starts
+        # after the eval block, so dt is training time only.
+        dt_ema = dt if dt_ema is None else 0.9 * dt_ema + 0.1 * dt
+        remaining = (max_steps - step - 1) * dt_ema
+        eta = f"{int(remaining // 3600)}h{int(remaining % 3600 // 60):02d}m"
         noise_col = f" | B_simple: {b_simple:,.0f}" if math.isfinite(b_simple) else ""
         # peak memory answers "does this B fit on this card" straight from the log,
         # which is the first thing you need to know on a machine you just rented
         mem_col = f" | mem: {torch.cuda.max_memory_allocated() / 2**30:.1f}GB" if device_type == "cuda" else ""
-        print(f"step {step:5d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}{mem_col}{noise_col}")
+        print(f"step {step:5d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}{mem_col} | eta: {eta}{noise_col}")
         with open(log_file, "a") as f:
             f.write(f"{step} train {loss_accum.item():.6f}\n")
 

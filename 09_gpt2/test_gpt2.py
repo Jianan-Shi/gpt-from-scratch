@@ -16,6 +16,8 @@ exec(_SRC[: _SRC.index("# run the training loop")], _DEFS)
 CausalSelfAttention, RMSNorm = _DEFS["CausalSelfAttention"], _DEFS["RMSNorm"]
 SwiGLU, swiglu_hidden = _DEFS["SwiGLU"], _DEFS["swiglu_hidden"]
 rope_cache, apply_rope, rotate_half = _DEFS["rope_cache"], _DEFS["apply_rope"], _DEFS["rotate_half"]
+Muon, MultiOptimizer = _DEFS["Muon"], _DEFS["MultiOptimizer"]
+zeropower_via_newtonschulz5 = _DEFS["zeropower_via_newtonschulz5"]
 gradient_noise_scale = _DEFS["gradient_noise_scale"]
 save_checkpoint, prune_checkpoints = _DEFS["save_checkpoint"], _DEFS["prune_checkpoints"]
 GPT, GPTConfig = _DEFS["GPT"], _DEFS["GPTConfig"]
@@ -873,3 +875,138 @@ def test_rope_model_starts_at_the_uniform_loss():
         _, loss = model(idx, targets)
 
     assert abs(loss.item() - math.log(TINY.vocab_size)) < 0.15
+
+
+# ---------------------------------------------------------------------------------------
+# Muon
+
+
+def test_newton_schulz_pulls_singular_values_to_one():
+    """正交化的定义：所有奇异值拉到 1 附近，方向不变。
+
+    五次迭代是刻意不追求精确的——收进 [0.7, 1.3] 就够用，换来的是只做矩阵乘法，
+    比真的做 SVD 快几个数量级。
+    """
+    torch.manual_seed(0)
+    G = torch.randn(64, 32) @ torch.diag(torch.linspace(1.0, 10.0, 32)) # 条件数约 10
+
+    before = torch.linalg.svdvals(G)
+    after = torch.linalg.svdvals(zeropower_via_newtonschulz5(G).float())
+
+    assert before.max() / before.min() > 8, "输入本来就该是病态的，否则测不出东西"
+    assert after.min() > 0.6 and after.max() < 1.3, after
+    assert after.max() / after.min() < 2.0, "条件数从 ~10 压到 2 以内"
+
+
+def test_newton_schulz_needs_more_steps_when_extremely_ill_conditioned():
+    """五步是够用而不是收敛：条件数 3000 的矩阵五步只能压到 [0.17, 0.76]，十步才到位。
+
+    真实梯度的条件数在十几这个量级，所以默认的五步是划算的取舍。知道这个边界在哪，
+    是因为写测试时先拿了一个条件数 3000 的矩阵，然后测试红了。
+    """
+    torch.manual_seed(0)
+    G = torch.randn(64, 32) @ torch.diag(torch.tensor([100.0, 10.0] + [0.1] * 30))
+
+    five = torch.linalg.svdvals(zeropower_via_newtonschulz5(G, steps=5).float())
+    ten = torch.linalg.svdvals(zeropower_via_newtonschulz5(G, steps=10).float())
+
+    assert five.min() < 0.5, "五步不够"
+    assert ten.min() > 0.6 and ten.max() < 1.3, "十步收敛"
+
+
+def test_newton_schulz_discards_the_gradient_scale():
+    """梯度整体放大 100 倍，正交化之后的方向不变——步长由学习率单独决定。"""
+    torch.manual_seed(0)
+    G = torch.randn(32, 16)
+
+    a = zeropower_via_newtonschulz5(G).float()
+    b = zeropower_via_newtonschulz5(G * 100).float()
+
+    # bf16 迭代，所以只能对到小数点后两位——Muon 本来就不需要精确的正交矩阵
+    assert torch.allclose(a, b, atol=5e-2), (a - b).abs().max()
+
+
+def test_newton_schulz_handles_both_orientations():
+    """长边在前时内部会转置，转置回来的结果必须和直接算一致。"""
+    torch.manual_seed(0)
+    G = torch.randn(64, 16)
+
+    tall = zeropower_via_newtonschulz5(G).float()
+    wide = zeropower_via_newtonschulz5(G.T.contiguous()).float()
+
+    assert torch.allclose(tall, wide.T, atol=2e-2)
+
+
+def test_muon_reduces_a_simple_loss():
+    """能不能真的优化——最基本的一关。"""
+    torch.manual_seed(0)
+    W = torch.nn.Parameter(torch.randn(16, 16))
+    target = torch.randn(16, 16)
+    opt = Muon([W], lr=0.05)
+
+    losses = []
+    for _ in range(150):
+        loss = (W - target).pow(2).mean()
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        losses.append(loss.item())
+
+    # 正交化把每步的长度固定住了，所以收敛是线性的而不是二次的：
+    # 50 步降一半，150 步降到 1/20。这个形状本身就是 Muon 和 Adam 的区别之一。
+    assert losses[49] < losses[0] / 1.8, losses[::25]
+    assert losses[-1] < losses[0] / 10, losses[::25]
+
+
+def test_muon_takes_only_the_block_matrices():
+    """嵌入表和 lm_head 虽然是 2 维，但每行是一个独立 token，
+    "矩阵的奇异值"没有对应意义，所以按作者的做法留给 AdamW。
+    权重共享让 wte 和 lm_head 是同一个张量，更不能被两个优化器同时更新。
+    """
+    model = GPT(GPTConfig(**{**TINY.__dict__, "optimizer": "muon"}))
+    opt = model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device="cpu")
+
+    assert isinstance(opt, MultiOptimizer)
+    muon_params = {id(p) for g in opt.optimizers[0].param_groups for p in g["params"]}
+
+    assert id(model.transformer.wte.weight) not in muon_params, "嵌入表不该交给 Muon"
+    assert id(model.lm_head.weight) not in muon_params
+    assert id(model.transformer.h[0].attn.c_attn.weight) in muon_params
+
+    # 每个参数恰好属于一个优化器，没有重复也没有遗漏
+    all_ids = [id(p) for o in opt.optimizers for g in o.param_groups for p in g["params"]]
+    assert len(all_ids) == len(set(all_ids)) == len(list(model.parameters()))
+
+
+def test_muon_and_adamw_keep_their_own_learning_rates():
+    """Muon 的学习率比 AdamW 大三十倍，调度器只能按比例缩放，不能一刀切。"""
+    model = GPT(GPTConfig(**{**TINY.__dict__, "optimizer": "muon", "muon_lr": 0.02}))
+    opt = model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device="cpu")
+
+    base = {g["base_lr"] for g in opt.param_groups}
+    assert base == {0.02, 6e-4}
+
+    # 调度到一半时，两组都应该减半
+    for g in opt.param_groups:
+        g["lr"] = 0.5 * g["base_lr"]
+    assert sorted(g["lr"] for g in opt.param_groups) == [3e-4, 3e-4, 0.01]
+
+
+def test_multi_optimizer_state_survives_a_checkpoint():
+    """续跑要靠它：两个优化器的状态都得存下来。"""
+    torch.manual_seed(0)
+    model = GPT(GPTConfig(**{**TINY.__dict__, "optimizer": "muon"}))
+    opt = model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device="cpu")
+    idx = torch.randint(0, TINY.vocab_size, (2, 16))
+    model(idx, idx)[1].backward()
+    opt.step()
+
+    sd = opt.state_dict()
+    fresh_model = GPT(GPTConfig(**{**TINY.__dict__, "optimizer": "muon"}))
+    fresh = fresh_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device="cpu")
+    fresh.load_state_dict(sd)
+
+    p = opt.optimizers[0].param_groups[0]["params"][0]
+    q = fresh.optimizers[0].param_groups[0]["params"][0]
+    assert torch.equal(opt.optimizers[0].state[p]["momentum_buffer"],
+                       fresh.optimizers[0].state[q]["momentum_buffer"])
