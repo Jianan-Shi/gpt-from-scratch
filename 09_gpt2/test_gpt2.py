@@ -341,6 +341,26 @@ def test_4090_preset_keeps_the_recipe_and_fits_24gb():
 # RMSNorm
 
 
+def test_rmsnorm_matches_the_explicit_formula():
+    """实现用的是融合算子 F.rms_norm，这里把公式逐项写出来对拍。
+
+    x / sqrt(mean(x^2) + eps) * gain
+    """
+    torch.manual_seed(0)
+    dim = 64
+    norm = RMSNorm(dim)
+    with torch.no_grad():
+        norm.weight.normal_(1.0, 0.1) # gain 不为 1，才测得到它有没有被乘上
+    x = torch.randn(4, 16, dim) * 3 + 2
+
+    manual = x.float()
+    manual = manual * torch.rsqrt(manual.pow(2).mean(-1, keepdim=True) + norm.eps)
+    manual = (manual * norm.weight).to(x.dtype)
+
+    with torch.no_grad():
+        assert torch.allclose(norm(x), manual, atol=1e-5)
+
+
 def test_rmsnorm_matches_torchs_implementation():
     """和 torch.nn.RMSNorm 对拍——手写实现是否真的是 RMSNorm，由标准实现说了算。"""
     torch.manual_seed(0)
@@ -526,6 +546,101 @@ def test_swiglu_down_projection_gets_the_scaled_init():
 def test_swiglu_model_starts_at_the_uniform_loss():
     torch.manual_seed(0)
     model = GPT(GPTConfig(**{**TINY.__dict__, "mlp": "swiglu"})).eval()
+    idx = torch.randint(0, TINY.vocab_size, (4, 16))
+    targets = torch.randint(0, TINY.vocab_size, (4, 16))
+
+    with torch.no_grad():
+        _, loss = model(idx, targets)
+
+    assert abs(loss.item() - math.log(TINY.vocab_size)) < 0.15
+
+
+# ---------------------------------------------------------------------------------------
+# QK-norm
+
+
+def _attn(qk_norm):
+    torch.manual_seed(0)
+    cfg = GPTConfig(**{**TINY.__dict__, "qk_norm": qk_norm})
+    return CausalSelfAttention(cfg).eval()
+
+
+def test_qk_norm_makes_the_logits_scale_invariant():
+    """核心性质：把 q 整体放大 100 倍，输出完全不变。
+
+    点积因此只取决于 q、k 的方向。没有它的话，权重在训练中变大 -> logits 变大 ->
+    softmax 变尖 -> 梯度消失，而这个过程没有任何报错。
+    """
+    attn = _attn(qk_norm=True)
+    x = torch.randn(2, 16, TINY.n_embd)
+
+    with torch.no_grad():
+        before = attn(x)
+        attn.c_attn.weight[:TINY.n_embd].mul_(100.0) # c_attn 的前 n_embd 行是 q
+        attn.c_attn.bias[:TINY.n_embd].mul_(100.0)
+        after = attn(x)
+
+    assert torch.allclose(before, after, atol=1e-4)
+
+
+def test_without_qk_norm_the_same_scaling_changes_everything():
+    """对照组：不加 QK-norm 时，同样的放大会把 softmax 推向 one-hot。"""
+    attn = _attn(qk_norm=False)
+    x = torch.randn(2, 16, TINY.n_embd)
+
+    with torch.no_grad():
+        before = attn(x)
+        attn.c_attn.weight[:TINY.n_embd].mul_(100.0)
+        attn.c_attn.bias[:TINY.n_embd].mul_(100.0)
+        after = attn(x)
+
+    assert not torch.allclose(before, after, atol=1e-2)
+
+
+def test_qk_norm_bounds_the_attention_logits():
+    """gain=1 时 |q| = |k| = sqrt(hs)，所以 logit = q·k/sqrt(hs) 的上界是 sqrt(hs)。
+
+    这就是"logits 不会爆"的定量版本。
+    """
+    attn = _attn(qk_norm=True)
+    head_size = TINY.n_embd // TINY.n_head
+    x = torch.randn(2, 16, TINY.n_embd) * 50 # 输入故意放大
+
+    with torch.no_grad():
+        B, T, C = x.shape
+        q, k, _ = attn.c_attn(x).split(TINY.n_embd, dim=2)
+        q = attn.q_norm(q.view(B, T, TINY.n_head, head_size).transpose(1, 2))
+        k = attn.k_norm(k.view(B, T, TINY.n_head, head_size).transpose(1, 2))
+        logits = (q @ k.transpose(-2, -1)) / math.sqrt(head_size)
+
+    assert logits.abs().max().item() <= math.sqrt(head_size) + 1e-4
+
+
+def test_qk_norm_keeps_attention_causal():
+    """归一化是逐位置的，不该破坏因果性。"""
+    attn = _attn(qk_norm=True)
+    x = torch.randn(1, 16, TINY.n_embd)
+    y = x.clone()
+    y[:, 8:] = torch.randn(1, 8, TINY.n_embd)
+
+    with torch.no_grad():
+        assert torch.allclose(attn(x)[:, :8], attn(y)[:, :8], atol=1e-6)
+
+
+def test_qk_norm_costs_two_vectors_per_layer():
+    """每层多 2 * head_size 个参数——相对 124M 可以忽略。"""
+    plain = GPT(GPTConfig(**{**TINY.__dict__, "qk_norm": False}))
+    normed = GPT(GPTConfig(**{**TINY.__dict__, "qk_norm": True}))
+
+    head_size = TINY.n_embd // TINY.n_head
+    delta = sum(p.numel() for p in normed.parameters()) - sum(p.numel() for p in plain.parameters())
+
+    assert delta == 2 * head_size * TINY.n_layer
+
+
+def test_qk_norm_model_starts_at_the_uniform_loss():
+    torch.manual_seed(0)
+    model = GPT(GPTConfig(**{**TINY.__dict__, "qk_norm": True})).eval()
     idx = torch.randint(0, TINY.vocab_size, (4, 16))
     targets = torch.randint(0, TINY.vocab_size, (4, 16))
 

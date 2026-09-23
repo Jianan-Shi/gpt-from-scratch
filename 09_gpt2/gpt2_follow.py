@@ -23,6 +23,19 @@ class CausalSelfAttention(nn.Module):
         # regularization
         self.n_head = config.n_head
         self.n_embd = config.n_embd
+        # QK-norm (Henry et al. 2020; Gemma2/Qwen3 用的就是这个形式)：
+        # 算点积之前先对 q、k 在 head_size 维上做 RMSNorm。
+        #
+        # 要解决的问题：attention logits 是 q·k/sqrt(hs)，而 q、k 的长度随权重一起长。
+        # 训练久了权重变大，logits 跟着变大，softmax 越来越尖，梯度越来越小——
+        # 表现是"训着训着学不动了"，或者提高学习率就发散。归一化之后点积只取决于
+        # q、k 的**方向**，logits 有了上界（gain=1 时是 sqrt(hs)），
+        # 于是能用更大的学习率。代价是每层多两个 head_size 长的向量。
+        self.qk_norm = config.qk_norm
+        if config.qk_norm:
+            head_size = config.n_embd // config.n_head
+            self.q_norm = RMSNorm(head_size)
+            self.k_norm = RMSNorm(head_size)
         # [cleanup] the causal mask buffer ("bias") is gone: flash attention takes
         # is_causal=True instead, and the buffer only wasted ~48MB of VRAM (12 x 1024x1024 fp32).
         # from_pretrained already filters out the HF checkpoint's .attn.bias keys.
@@ -34,6 +47,10 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        if self.qk_norm:
+            # 在最后一维（head_size）上归一化，所以每个头、每个位置各自归一化。
+            # 点积因此只取决于 q 和 k 的**方向**，不取决于它们的长度。
+            q, k = self.q_norm(q), self.k_norm(k)
 
         # attention (materializes th elarge(T, T) matrix for all the queries and keys)
         # att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
@@ -137,13 +154,18 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x):
-        # 在 fp32 里做归约：bf16 下 x^2 容易丢精度，而这一步每层都要过。
-        # 乘完 gain 之后再转回输入的 dtype——先转回去的话 bf16 会被 fp32 的 weight
-        # 提升回 fp32，后面的 matmul 跟着退回 fp32，训练变慢而没有任何报错。
-        dtype = x.dtype
-        x = x.float()
-        x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-        return (x * self.weight).to(dtype)
+        # 数学上就是下面这三行，测试里逐项对拍：
+        #     x = x.float()
+        #     x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        #     return (x * self.weight).to(x.dtype)
+        # 但手写版会把整张激活升到 fp32 并被 autograd 保存下来。作用在 (B, T, C) 上时
+        # 无所谓，作用在 QK-norm 的 (B, nh, T, hs) 上时，8GB 的卡直接 OOM。
+        # F.rms_norm 是融合算子：同样的数学，不留 fp32 中间量，也更快。
+        # gain 跟着输入的 dtype 走：fp32 的 gain 会把 bf16 的输出提升回 fp32，
+        # 于是那份本来要省掉的 fp32 激活又回来了（而且下游 matmul 也跟着变慢）。
+        # 归约本身在 fp32 里做，这是算子内部的行为，不受这里影响。
+        weight = self.weight if self.weight.dtype == x.dtype else self.weight.to(x.dtype)
+        return F.rms_norm(x, self.weight.shape, weight, self.eps)
 
 
 def make_norm(config):
@@ -176,6 +198,7 @@ class GPTConfig:
     # makes the comparison a controlled experiment rather than two different programs.
     norm: str = "layernorm" # layernorm | rmsnorm
     mlp: str = "gelu"       # gelu | swiglu
+    qk_norm: bool = False   # normalise q and k before the dot product
 
 class GPT(nn.Module):
 
@@ -588,6 +611,7 @@ parser.add_argument("--warmup-steps", type=int, default=None,
 parser.add_argument("--norm", choices=["layernorm", "rmsnorm"], default=None,
                     help="architecture switch; default keeps the GPT-2 baseline")
 parser.add_argument("--mlp", choices=["gelu", "swiglu"], default=None)
+parser.add_argument("--qk-norm", dest="qk_norm", default=None, action=argparse.BooleanOptionalAction)
 parser.add_argument("--seed", type=int, default=1337)
 parser.add_argument("--tag", default=None, help="appended to the run directory name")
 parser.add_argument("--eval-interval", type=int, default=None)
@@ -657,7 +681,8 @@ if resume_path is not None:
         print(f"resuming from {resume_path} at step {resume_ckpt['step']}")
 
 # create model
-arch = {k: v for k, v in (("norm", args.norm), ("mlp", args.mlp)) if v is not None}
+arch = {k: v for k, v in (("norm", args.norm), ("mlp", args.mlp),
+                          ("qk_norm", args.qk_norm)) if v is not None}
 if master_process and arch:
     print(f"architecture overrides: {arch}")
 model = GPT(GPTConfig(vocab_size=50304, **arch))
