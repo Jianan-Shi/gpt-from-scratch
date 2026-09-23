@@ -15,6 +15,7 @@ _DEFS = {"__name__": "gpt2_defs"}
 exec(_SRC[: _SRC.index("# run the training loop")], _DEFS)
 CausalSelfAttention, RMSNorm = _DEFS["CausalSelfAttention"], _DEFS["RMSNorm"]
 SwiGLU, swiglu_hidden = _DEFS["SwiGLU"], _DEFS["swiglu_hidden"]
+rope_cache, apply_rope, rotate_half = _DEFS["rope_cache"], _DEFS["apply_rope"], _DEFS["rotate_half"]
 gradient_noise_scale = _DEFS["gradient_noise_scale"]
 save_checkpoint, prune_checkpoints = _DEFS["save_checkpoint"], _DEFS["prune_checkpoints"]
 GPT, GPTConfig = _DEFS["GPT"], _DEFS["GPTConfig"]
@@ -751,6 +752,120 @@ def test_gqa_keeps_attention_causal():
 def test_gqa_model_starts_at_the_uniform_loss():
     torch.manual_seed(0)
     model = GPT(GPTConfig(**{**TINY.__dict__, "n_kv_head": 1})).eval()
+    idx = torch.randint(0, TINY.vocab_size, (4, 16))
+    targets = torch.randint(0, TINY.vocab_size, (4, 16))
+
+    with torch.no_grad():
+        _, loss = model(idx, targets)
+
+    assert abs(loss.item() - math.log(TINY.vocab_size)) < 0.15
+
+
+# ---------------------------------------------------------------------------------------
+# RoPE
+
+
+def _rope_at(x, pos, head_size=64, block_size=128):
+    """把单个向量 x 当作位置 pos 上的 q 或 k，旋转之后返回。"""
+    cos, sin = rope_cache(head_size, block_size)
+    return apply_rope(x.view(1, 1, 1, head_size), cos[pos].view(1, 1, 1, -1),
+                      sin[pos].view(1, 1, 1, -1)).view(-1)
+
+
+def test_rope_dot_product_depends_only_on_the_distance():
+    """RoPE 的定义性质，也是"相对位置编码"这个说法的全部含义：
+
+    q 在位置 m、k 在位置 n，点积只取决于 m - n。把两者同时平移同样的距离，
+    注意力分数一个字节都不变。绝对位置嵌入做不到这一点——它把 5 和 105 当作
+    两个无关的位置来学。
+    """
+    torch.manual_seed(0)
+    q, k = torch.randn(64), torch.randn(64)
+
+    base = torch.dot(_rope_at(q, 3), _rope_at(k, 7))
+    shifted = torch.dot(_rope_at(q, 23), _rope_at(k, 27)) # 同时 +20，距离仍是 -4
+    far = torch.dot(_rope_at(q, 60), _rope_at(k, 64))
+
+    assert torch.allclose(base, shifted, atol=1e-4), (base, shifted)
+    assert torch.allclose(base, far, atol=1e-4)
+
+    different_distance = torch.dot(_rope_at(q, 3), _rope_at(k, 9)) # 距离变了
+    assert not torch.allclose(base, different_distance, atol=1e-3)
+
+
+def test_rope_is_a_rotation_so_it_preserves_length():
+    """旋转不改变长度——这是它能安全插在 attention 里的前提：
+    q、k 的模长不变，所以 1/sqrt(hs) 的缩放仍然成立。"""
+    torch.manual_seed(0)
+    x = torch.randn(64)
+
+    for pos in (0, 1, 17, 127):
+        assert torch.allclose(_rope_at(x, pos).norm(), x.norm(), atol=1e-4)
+
+
+def test_rope_at_position_zero_is_the_identity():
+    """位置 0 的角度是 0，cos=1、sin=0，所以什么都不做。"""
+    torch.manual_seed(0)
+    x = torch.randn(64)
+
+    assert torch.allclose(_rope_at(x, 0), x, atol=1e-5)
+
+
+def test_rotate_half_is_multiplication_by_i():
+    """把 (x1, x2) 看成复数 x1 + i*x2 时，这一步就是乘 i。
+    连续两次应该得到 -x（i^2 = -1）。"""
+    x = torch.randn(1, 1, 1, 8)
+
+    assert torch.allclose(rotate_half(rotate_half(x)), -x, atol=1e-6)
+
+
+def test_rope_frequencies_span_scales():
+    """第 i 对维度的角速度是 base^(-2i/hs)：高频区分近距离，低频区分远距离。
+
+    如果所有维度用同一个频率，位置信息就只剩一个尺度，长距离会绕回来混淆。
+    """
+    cos, sin = rope_cache(head_size=64, block_size=1024)
+    angles = torch.atan2(sin[1], cos[1]) # 相邻一个位置转过的角度
+
+    assert angles[0] > angles[31], "维度对应的频率必须递减"
+    assert angles[0] > 0.9, "最高频每步接近 1 弧度"
+    assert 0 < angles[31] < 1e-3, "最低频每步几乎不动"
+
+
+def test_rope_model_has_no_learned_position_embedding():
+    """RoPE 取代 wpe，省下 block_size * n_embd 个参数。"""
+    learned = GPT(GPTConfig(**{**TINY.__dict__, "pos": "learned"}))
+    rope = GPT(GPTConfig(**{**TINY.__dict__, "pos": "rope"}))
+
+    assert hasattr(learned.transformer, "wpe")
+    assert not hasattr(rope.transformer, "wpe")
+
+    delta = sum(p.numel() for p in learned.parameters()) - sum(p.numel() for p in rope.parameters())
+    assert delta == TINY.block_size * TINY.n_embd
+
+
+def test_rope_cache_is_not_saved_in_checkpoints():
+    """cos/sin 是算出来的常量，不该占 checkpoint 的体积。"""
+    rope = GPT(GPTConfig(**{**TINY.__dict__, "pos": "rope"}))
+
+    assert "rope_cos" not in rope.state_dict()
+    assert any("rope_cos" in name for name, _ in rope.named_buffers())
+
+
+def test_rope_keeps_attention_causal():
+    torch.manual_seed(0)
+    model = GPT(GPTConfig(**{**TINY.__dict__, "pos": "rope"})).eval()
+    idx = torch.randint(0, TINY.vocab_size, (1, 16))
+    changed = idx.clone()
+    changed[:, 8:] = torch.randint(0, TINY.vocab_size, (1, 8))
+
+    with torch.no_grad():
+        assert torch.allclose(model(idx)[0][:, :8], model(changed)[0][:, :8], atol=1e-5)
+
+
+def test_rope_model_starts_at_the_uniform_loss():
+    torch.manual_seed(0)
+    model = GPT(GPTConfig(**{**TINY.__dict__, "pos": "rope"})).eval()
     idx = torch.randint(0, TINY.vocab_size, (4, 16))
     targets = torch.randint(0, TINY.vocab_size, (4, 16))
 

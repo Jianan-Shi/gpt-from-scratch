@@ -10,6 +10,39 @@ from hellaswag import render_example, iterate_examples
 
 # -----------------------------------------------------------------------------
 
+def rope_cache(head_size, block_size, base=10000.0):
+    """预先算好每个位置、每个频率的 cos 和 sin，形状都是 (block_size, head_size)。
+
+    第 i 对维度的角速度是 base^(-2i/hs)：i=0 转得最快（相邻 token 就差很多角度），
+    i 最大时转得最慢（要隔很远才差一个角度）。于是同一个向量的不同维度对上，
+    编码了不同尺度的距离——近距离靠高频区分，远距离靠低频。
+    """
+    inv_freq = 1.0 / (base ** (torch.arange(0, head_size, 2).float() / head_size))
+    angles = torch.outer(torch.arange(block_size).float(), inv_freq) # (T, hs/2)
+    # 前后两半用同一组角度：配合下面 rotate_half 的成对方式（Llama/HF 的约定）
+    angles = torch.cat([angles, angles], dim=-1) # (T, hs)
+    return angles.cos(), angles.sin()
+
+
+def rotate_half(x):
+    """把 (x1, x2) 看成复数 x1 + i*x2，这一步实现乘 i：(x1, x2) -> (-x2, x1)。"""
+    x1, x2 = x.chunk(2, dim=-1)
+    return torch.cat([-x2, x1], dim=-1)
+
+
+def apply_rope(x, cos, sin):
+    """按位置把 x 旋转对应的角度：x * cos + rotate_half(x) * sin。
+
+    这就是二维旋转矩阵作用在每一对维度上。关键性质（测试里钉死）：
+    旋转 m 角度的 q 和旋转 n 角度的 k 做点积，结果只取决于 **m - n**。
+    所以位置信息以"相对距离"的形式进入注意力，而不是"绝对位置"。
+    """
+    dtype = x.dtype
+    x = x.float() # 三角函数和旋转在 fp32 里做，bf16 下角度精度不够
+    out = x * cos + rotate_half(x) * sin
+    return out.to(dtype)
+
+
 class CausalSelfAttention(nn.Module):
     """因果自注意力，可选 GQA（Grouped Query Attention）。
 
@@ -59,7 +92,7 @@ class CausalSelfAttention(nn.Module):
         # is_causal=True instead, and the buffer only wasted ~48MB of VRAM (12 x 1024x1024 fp32).
         # from_pretrained already filters out the HF checkpoint's .attn.bias keys.
 
-    def forward(self, x):
+    def forward(self, x, rope=None):
         B, T, C = x.size()
         qkv = self.c_attn(x)
         kv_width = self.n_kv_head * self.head_size
@@ -71,6 +104,11 @@ class CausalSelfAttention(nn.Module):
             # 在最后一维（head_size）上归一化，所以每个头、每个位置各自归一化。
             # 点积因此只取决于 q 和 k 的**方向**，不取决于它们的长度。
             q, k = self.q_norm(q), self.k_norm(k)
+        if rope is not None:
+            # 顺序：先 QK-norm 再 RoPE（Qwen3 的做法）。反过来的话归一化会把旋转
+            # 带来的长度变化抹掉一部分——虽然旋转本身保长，但和 gain 相乘之后不再是。
+            cos, sin = rope
+            q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
 
         # attention (materializes th elarge(T, T) matrix for all the queries and keys)
         # att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
@@ -205,8 +243,8 @@ class Block(nn.Module):
         self.ln_2 = make_norm(config)
         self.mlp = make_mlp(config)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
+    def forward(self, x, rope=None):
+        x = x + self.attn(self.ln_1(x), rope=rope)
         x = x + self.mlp(self.ln_2(x))
         return x
 
@@ -224,6 +262,7 @@ class GPTConfig:
     mlp: str = "gelu"       # gelu | swiglu
     qk_norm: bool = False   # normalise q and k before the dot product
     n_kv_head: int = None   # None = one K/V per query head (standard MHA)
+    pos: str = "learned"    # learned | rope
 
 class GPT(nn.Module):
 
@@ -233,10 +272,18 @@ class GPT(nn.Module):
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd), 
-            wpe = nn.Embedding(config.block_size, config.n_embd),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = make_norm(config),
         ))
+        if config.pos == "learned":
+            # RoPE 取代它：位置不再作为一个加到 token 嵌入上的向量，
+            # 而是每层注意力里对 q、k 的旋转。省下 block_size * n_embd = 786,432 个参数。
+            self.transformer.wpe = nn.Embedding(config.block_size, config.n_embd)
+        else:
+            cos, sin = rope_cache(config.n_embd // config.n_head, config.block_size)
+            # persistent=False：这是算出来的常量，不必进 checkpoint
+            self.register_buffer("rope_cos", cos, persistent=False)
+            self.register_buffer("rope_sin", sin, persistent=False)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         # weight sharing scheme
@@ -261,13 +308,18 @@ class GPT(nn.Module):
         B, T = idx.size()
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
         # forward the token and position embeddings
-        pos = torch.arange(0, T, dtype=torch.long, device=idx.device) # shape (T)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (T, n_embd)
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (B, T, n_embd)
-        x = tok_emb + pos_emb
+        rope = None
+        if self.config.pos == "rope":
+            # (1, 1, T, hs) 以便广播到 (B, nh, T, hs)
+            rope = (self.rope_cos[:T].view(1, 1, T, -1), self.rope_sin[:T].view(1, 1, T, -1))
+            x = tok_emb
+        else:
+            pos = torch.arange(0, T, dtype=torch.long, device=idx.device) # shape (T)
+            x = tok_emb + self.transformer.wpe(pos)
         # forward the blocks of the transformer
         for block in self.transformer.h:
-            x = block(x)
+            x = block(x, rope=rope)
         # forward the final layernorm and the classifier
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x) # (B, T, vocab_size)
@@ -638,6 +690,7 @@ parser.add_argument("--norm", choices=["layernorm", "rmsnorm"], default=None,
 parser.add_argument("--mlp", choices=["gelu", "swiglu"], default=None)
 parser.add_argument("--qk-norm", dest="qk_norm", default=None, action=argparse.BooleanOptionalAction)
 parser.add_argument("--n-kv-head", dest="n_kv_head", type=int, default=None)
+parser.add_argument("--pos", choices=["learned", "rope"], default=None)
 parser.add_argument("--seed", type=int, default=1337)
 parser.add_argument("--tag", default=None, help="appended to the run directory name")
 parser.add_argument("--eval-interval", type=int, default=None)
@@ -708,7 +761,8 @@ if resume_path is not None:
 
 # create model
 arch = {k: v for k, v in (("norm", args.norm), ("mlp", args.mlp),
-                          ("qk_norm", args.qk_norm), ("n_kv_head", args.n_kv_head))
+                          ("qk_norm", args.qk_norm), ("n_kv_head", args.n_kv_head),
+                          ("pos", args.pos))
         if v is not None}
 if master_process and arch:
     print(f"architecture overrides: {arch}")
