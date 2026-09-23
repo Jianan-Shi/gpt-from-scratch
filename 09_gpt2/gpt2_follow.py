@@ -426,11 +426,6 @@ if master_process:
 # [fix] autocast and synchronize want the device *type* ("cuda"), not "cuda:0" as under DDP
 device_type = "cuda" if device.startswith("cuda") else "cpu"
 
-torch.manual_seed(1337)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed(1337)
-    # the allocator cap moved into the preset (memory_fraction), applied below
-
 enc = tiktoken.get_encoding("gpt2")
 
 # -----------------------------------------------------------------------------------------------------------------
@@ -489,6 +484,10 @@ parser.add_argument("--resume", default=None, metavar="PATH|auto",
 parser.add_argument("--max-steps", type=int, default=None)
 parser.add_argument("--warmup-steps", type=int, default=None,
                     help="keep it near 3.75%% of max-steps, as in the original 715/19073")
+# The data order is fixed by the loader, so --seed varies initialisation only. That is
+# the noise floor an ablation table needs: two runs of the same config, different seed.
+parser.add_argument("--seed", type=int, default=1337)
+parser.add_argument("--tag", default=None, help="appended to the run directory name")
 parser.add_argument("--eval-interval", type=int, default=None)
 args = parser.parse_args()
 preset = PRESETS[args.preset]
@@ -507,6 +506,9 @@ eval_interval, use_compile = preset.eval_interval, preset.use_compile
 assert total_batch_size % (B * T * ddp_world_size) == 0, "make sure total_batch_size is divisible by B*T*ddp_world_size"
 grad_accum_steps = total_batch_size // (B * T * ddp_world_size)
 val_loss_steps = max(1, preset.val_tokens // (B * T * ddp_world_size)) # per process
+torch.manual_seed(args.seed) # after argparse: --seed has to be known first
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(args.seed)
 if preset.memory_fraction is not None and device_type == "cuda":
     torch.cuda.set_per_process_memory_fraction(preset.memory_fraction)
 if master_process:
@@ -601,7 +603,8 @@ if resume_ckpt is not None:
 if resume_ckpt is not None:
     log_dir = os.path.dirname(resume_path) # append to the same curve instead of starting a new one
 else:
-    log_dir = os.path.join("log", time.strftime("run_%Y%m%d_%H%M%S"))
+    log_dir = os.path.join("log", time.strftime("run_%Y%m%d_%H%M%S")
+                           + (f"_{args.tag}" if args.tag else ""))
 log_file = os.path.join(log_dir, "log.txt")
 if master_process:
     os.makedirs(log_dir, exist_ok=resume_ckpt is not None) # never write into someone else's run
