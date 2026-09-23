@@ -65,6 +65,56 @@ class MLP(nn.Module):
         return x
 
 
+def swiglu_hidden(n_embd, multiple_of=None):
+    """SwiGLU 有三个矩阵而不是两个，所以隐藏层取 8/3 倍才和原来参数量相同。
+
+    原 MLP:  n_embd -> 4*n_embd -> n_embd          = 8 * n_embd^2
+    SwiGLU: n_embd -> h (两路) -> n_embd            = 3 * n_embd * h
+    令两者相等：h = 8/3 * n_embd。n_embd=768 时正好是 2048。
+
+    照搬 4 倍会让这一层凭空多出 33% 的参数，那时"SwiGLU 更好"就只是"参数更多更好"，
+    消融就白做了。Llama 也是这么取的（再向上对齐到 256 的倍数）。
+    """
+    # 对齐到 64 的倍数是为了照顾 tensor core，但在小维度上这个对齐会反客为主：
+    # n_embd=32 时理想值 85.3 被抬到 128，参数量多 27%，消融就不公平了。
+    # 所以对齐粒度跟着维度走，大模型仍是 64。
+    if multiple_of is None:
+        multiple_of = min(64, max(8, n_embd // 8))
+    h = int(8 * n_embd / 3)
+    return ((h + multiple_of - 1) // multiple_of) * multiple_of
+
+
+class SwiGLU(nn.Module):
+    """用一路去门控另一路：SwiGLU(x) = (SiLU(x W_gate) * (x W_up)) W_down
+
+    原来的 MLP 是"升维 -> 非线性 -> 降维"，非线性对每个通道独立作用。门控把它换成
+    **两路相乘**：一路过 SiLU 当作"开关"，另一路是"内容"，逐元素相乘之后再降维。
+    于是某个通道要不要往下传，取决于输入本身，而不是一个固定的形状。
+
+    SiLU(x) = x * sigmoid(x)，和 GELU 形状几乎一样，所以差别不在这个非线性，
+    而在那个乘法。Shazeer (2020) 的原话是 "we offer no explanation for the
+    improvement"——它是实验上站住的，不是推导出来的。Llama/PaLM/Qwen 都用。
+
+    代价：三个矩阵意味着三次 matmul 而不是两次，同参数量下通常略慢一点。
+    这一列要和 loss 一起看。
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        hidden = swiglu_hidden(config.n_embd)
+        self.c_gate = nn.Linear(config.n_embd, hidden) # 开关那一路
+        self.c_up = nn.Linear(config.n_embd, hidden)   # 内容那一路
+        self.c_proj = nn.Linear(hidden, config.n_embd)
+        self.c_proj.NANOGPT_SCALE_INIT = 1 # 和原 MLP 一样：残差路径上的投影要缩小初始化
+
+    def forward(self, x):
+        return self.c_proj(F.silu(self.c_gate(x)) * self.c_up(x))
+
+
+def make_mlp(config):
+    return SwiGLU(config) if config.mlp == "swiglu" else MLP(config)
+
+
 class RMSNorm(nn.Module):
     """LayerNorm 去掉减均值和 bias，只按均方根缩放。
 
@@ -107,7 +157,7 @@ class Block(nn.Module):
         self.ln_1 = make_norm(config)
         self.attn = CausalSelfAttention(config)
         self.ln_2 = make_norm(config)
-        self.mlp = MLP(config)
+        self.mlp = make_mlp(config)
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
@@ -125,6 +175,7 @@ class GPTConfig:
     # One codebase, one training path, one flag apart between any two runs: that is what
     # makes the comparison a controlled experiment rather than two different programs.
     norm: str = "layernorm" # layernorm | rmsnorm
+    mlp: str = "gelu"       # gelu | swiglu
 
 class GPT(nn.Module):
 
@@ -536,6 +587,7 @@ parser.add_argument("--warmup-steps", type=int, default=None,
 # the noise floor an ablation table needs: two runs of the same config, different seed.
 parser.add_argument("--norm", choices=["layernorm", "rmsnorm"], default=None,
                     help="architecture switch; default keeps the GPT-2 baseline")
+parser.add_argument("--mlp", choices=["gelu", "swiglu"], default=None)
 parser.add_argument("--seed", type=int, default=1337)
 parser.add_argument("--tag", default=None, help="appended to the run directory name")
 parser.add_argument("--eval-interval", type=int, default=None)
@@ -600,7 +652,7 @@ if resume_path is not None:
         print(f"resuming from {resume_path} at step {resume_ckpt['step']}")
 
 # create model
-arch = {k: v for k, v in (("norm", args.norm),) if v is not None}
+arch = {k: v for k, v in (("norm", args.norm), ("mlp", args.mlp)) if v is not None}
 if master_process and arch:
     print(f"architecture overrides: {arch}")
 model = GPT(GPTConfig(vocab_size=50304, **arch))

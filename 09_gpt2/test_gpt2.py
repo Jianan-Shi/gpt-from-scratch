@@ -14,6 +14,7 @@ _SRC = open(__file__.replace("test_gpt2.py", "gpt2_follow.py")).read()
 _DEFS = {"__name__": "gpt2_defs"}
 exec(_SRC[: _SRC.index("# run the training loop")], _DEFS)
 CausalSelfAttention, RMSNorm = _DEFS["CausalSelfAttention"], _DEFS["RMSNorm"]
+SwiGLU, swiglu_hidden = _DEFS["SwiGLU"], _DEFS["swiglu_hidden"]
 gradient_noise_scale = _DEFS["gradient_noise_scale"]
 save_checkpoint, prune_checkpoints = _DEFS["save_checkpoint"], _DEFS["prune_checkpoints"]
 GPT, GPTConfig = _DEFS["GPT"], _DEFS["GPTConfig"]
@@ -432,3 +433,103 @@ def test_rmsnorm_gain_is_not_weight_decayed():
     decay_group = optimizer.param_groups[0]
     assert decay_group["weight_decay"] == 0.1
     assert all(p.dim() >= 2 for p in decay_group["params"]), "gain 混进了衰减组"
+
+
+# ---------------------------------------------------------------------------------------
+# SwiGLU
+
+
+def test_swiglu_hidden_is_eight_thirds():
+    """三个矩阵而不是两个，所以隐藏层取 8/3 倍才和原 MLP 参数量相同。
+
+    照搬 4 倍会多出 33% 参数，那时的"更好"只是"更大"。
+    """
+    assert swiglu_hidden(768) == 2048 # 768 * 8/3 恰好整除
+    assert swiglu_hidden(768) % 64 == 0, "对齐到 64 的倍数，照顾 tensor core"
+
+    for n_embd in (256, 512, 1024, 4096):
+        h = swiglu_hidden(n_embd)
+        assert abs(3 * n_embd * h - 8 * n_embd**2) / (8 * n_embd**2) < 0.05
+
+
+def test_swiglu_matches_the_baseline_parameter_count():
+    """消融的前提：两个变体的规模必须一样，否则比的是参数量不是结构。
+
+    按真实配置（n_embd=768）比，这是实际要跑的那个；小维度上对齐粒度会引入几个
+    百分点的偏差，见 swiglu_hidden 里的注释。
+    """
+    real = GPTConfig(vocab_size=50304) # n_embd=768
+    n_gelu = sum(p.numel() for p in _DEFS["MLP"](real).parameters())
+    n_swiglu = sum(p.numel() for p in SwiGLU(real).parameters())
+
+    assert abs(n_swiglu - n_gelu) / n_gelu < 0.001, (n_gelu, n_swiglu)
+
+    tiny_gelu = GPT(GPTConfig(**{**TINY.__dict__, "mlp": "gelu"}))
+    tiny_swiglu = GPT(GPTConfig(**{**TINY.__dict__, "mlp": "swiglu"}))
+    n_tg = sum(p.numel() for p in tiny_gelu.parameters())
+    n_ts = sum(p.numel() for p in tiny_swiglu.parameters())
+    assert abs(n_ts - n_tg) / n_tg < 0.03
+
+
+def test_swiglu_is_multiplicative_in_the_content_path():
+    """门控的本质：输出对"内容"那一路是线性的，对"开关"那一路不是。
+
+    把 c_up 整体放大 k 倍，输出精确放大 k 倍——普通 MLP 过了非线性就没有这个性质。
+    """
+    torch.manual_seed(0)
+    mlp = SwiGLU(TINY).eval()
+    with torch.no_grad():
+        mlp.c_proj.bias.zero_() # 否则输出里混着一个常数项
+    x = torch.randn(2, 8, TINY.n_embd)
+
+    with torch.no_grad():
+        before = mlp(x)
+        mlp.c_up.weight.mul_(3.0)
+        mlp.c_up.bias.mul_(3.0)
+        after = mlp(x)
+
+    assert torch.allclose(after, before * 3.0, atol=1e-5)
+
+
+def test_swiglu_gate_can_shut_a_channel_off():
+    """开关那一路归零 -> SiLU(0)=0 -> 整条输出归零，与内容无关。"""
+    torch.manual_seed(0)
+    mlp = SwiGLU(TINY).eval()
+    with torch.no_grad():
+        mlp.c_gate.weight.zero_()
+        mlp.c_gate.bias.zero_()
+        mlp.c_proj.bias.zero_()
+    x = torch.randn(2, 8, TINY.n_embd)
+
+    with torch.no_grad():
+        assert mlp(x).abs().max() < 1e-6
+
+
+def test_silu_is_x_times_sigmoid():
+    """SiLU(x) = x * sigmoid(x)，和 GELU 形状几乎一样——差别不在非线性，在那个乘法。"""
+    x = torch.randn(1000)
+
+    assert torch.allclose(F.silu(x), x * torch.sigmoid(x), atol=1e-6)
+
+
+def test_swiglu_down_projection_gets_the_scaled_init():
+    """残差路径上的投影仍要按 (2*n_layer)**-0.5 缩小，换了 MLP 不能把这个丢掉。"""
+    torch.manual_seed(0)
+    model = GPT(GPTConfig(**{**TINY.__dict__, "mlp": "swiglu"}))
+    expected = 0.02 * (2 * TINY.n_layer) ** -0.5
+
+    for block in model.transformer.h:
+        assert abs(block.mlp.c_proj.weight.std().item() - expected) < 0.3 * expected
+        assert abs(block.mlp.c_gate.weight.std().item() - 0.02) < 0.3 * 0.02
+
+
+def test_swiglu_model_starts_at_the_uniform_loss():
+    torch.manual_seed(0)
+    model = GPT(GPTConfig(**{**TINY.__dict__, "mlp": "swiglu"})).eval()
+    idx = torch.randint(0, TINY.vocab_size, (4, 16))
+    targets = torch.randint(0, TINY.vocab_size, (4, 16))
+
+    with torch.no_grad():
+        _, loss = model(idx, targets)
+
+    assert abs(loss.item() - math.log(TINY.vocab_size)) < 0.15
