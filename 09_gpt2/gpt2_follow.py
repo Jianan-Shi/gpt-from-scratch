@@ -412,16 +412,19 @@ else:
         device = "mps"
     print(f"using device: {device}")
 
-# [guard] refuse to start if another training run is already using this machine.
-# Two runs at once on the 8GB 4060 spill VRAM into host RAM (~5x slower, whole PC lags).
+# [guard] refuse to start a second run *on the same GPUs*. Two runs sharing one card
+# spill VRAM into host RAM (~5x slower); two runs on different cards are exactly how
+# ablations get run in parallel, so the lock is per CUDA_VISIBLE_DEVICES, not per script.
 # flock is released by the OS when the process exits, even on a crash or kill -9.
 import fcntl
+_lock_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "all").replace(",", "_")
 if master_process:
-    _run_lock = open("/tmp/gpt2_follow.lock", "w") # keep this handle open for the whole run
+    _run_lock = open(f"/tmp/gpt2_follow.gpu{_lock_devices}.lock", "w") # held for the whole run
     try:
         fcntl.flock(_run_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        raise SystemExit("another gpt2_follow.py is already training (check: pgrep -af gpt2_follow), refusing to start")
+        raise SystemExit(f"another gpt2_follow.py is already training on GPU {_lock_devices} "
+                         f"(check: pgrep -af gpt2_follow), refusing to start")
 
 # [fix] autocast and synchronize want the device *type* ("cuda"), not "cuda:0" as under DDP
 device_type = "cuda" if device.startswith("cuda") else "cpu"
