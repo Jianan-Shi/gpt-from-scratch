@@ -673,12 +673,19 @@ def prune_checkpoints(log_dir, keep):
     return ckpts[-keep:] if keep > 0 else []
 
 
-def find_latest_checkpoint(log_root="log"):
-    """--resume auto 用：拿所有 run 目录里最新的一个 ckpt。"""
+def find_latest_checkpoint(log_root="log", tag=None):
+    """--resume auto 用：拿**同 tag** 的 run 里最新的一个 ckpt。
+
+    必须按 tag 过滤。今天的消融每个都在最后一步存了 checkpoint，而它们的 batch 几何
+    和 10B 那次完全一样，meta 检查拦不住——不过滤的话，一次崩溃后的自动续跑会从
+    某个 954 步的消融 checkpoint 接着跑 10B，而且一声不吭。
+    """
     candidates = []
-    for run in os.listdir(log_root) if os.path.isdir(log_root) else []:
+    for run in sorted(os.listdir(log_root)) if os.path.isdir(log_root) else []:
         run_dir = os.path.join(log_root, run)
         if not os.path.isdir(run_dir):
+            continue
+        if tag is not None and not run.endswith(f"_{tag}"):
             continue
         candidates += [os.path.join(run_dir, f) for f in os.listdir(run_dir)
                        if f.startswith("ckpt_") and f.endswith(".pt")]
@@ -869,8 +876,16 @@ val_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_w
 
 torch.set_float32_matmul_precision('high')
 
+arch = {k: v for k, v in (("norm", args.norm), ("mlp", args.mlp),
+                          ("qk_norm", args.qk_norm), ("n_kv_head", args.n_kv_head),
+                          ("pos", args.pos), ("optimizer", args.optimizer),
+                          ("muon_lr", args.muon_lr))
+        if v is not None}
+if master_process and arch:
+    print(f"architecture overrides: {arch}")
+
 # [resume] load first: the checkpoint decides which run directory we append to
-resume_path = find_latest_checkpoint() if args.resume == "auto" else args.resume
+resume_path = find_latest_checkpoint(tag=args.tag) if args.resume == "auto" else args.resume
 resume_ckpt = None
 if resume_path is not None:
     resume_ckpt = torch.load(resume_path, map_location="cpu", weights_only=False)
@@ -880,17 +895,15 @@ if resume_path is not None:
     assert meta["world_size"] == ddp_world_size, f"checkpoint ran on {meta['world_size']} processes"
     assert (meta["B"], meta["T"], meta["total_batch_size"]) == (B, T, total_batch_size), \
         f"batch geometry changed: {meta} vs B={B} T={T} total={total_batch_size}"
+    # max_steps decides the whole lr schedule, so resuming a 19073-step run from a
+    # 954-step one would silently train on a different curve
+    assert meta.get("max_steps", max_steps) == max_steps, \
+        f"checkpoint was a {meta['max_steps']}-step run, this is {max_steps}"
+    assert meta.get("arch", {}) == arch, f"architecture differs: {meta.get('arch')} vs {arch}"
     if master_process:
         print(f"resuming from {resume_path} at step {resume_ckpt['step']}")
 
 # create model
-arch = {k: v for k, v in (("norm", args.norm), ("mlp", args.mlp),
-                          ("qk_norm", args.qk_norm), ("n_kv_head", args.n_kv_head),
-                          ("pos", args.pos), ("optimizer", args.optimizer),
-                          ("muon_lr", args.muon_lr))
-        if v is not None}
-if master_process and arch:
-    print(f"architecture overrides: {arch}")
 model = GPT(GPTConfig(vocab_size=50304, **arch))
 model.to(device)
 if use_compile:
@@ -999,7 +1012,8 @@ for step in range(start_step, max_steps):
                     val_loss=val_loss_accum.item(),
                     loader_state=train_loader.state_dict(),
                     meta={"preset": args.preset, "world_size": ddp_world_size,
-                          "B": B, "T": T, "total_batch_size": total_batch_size},
+                          "B": B, "T": T, "total_batch_size": total_batch_size,
+                          "max_steps": max_steps, "arch": arch},
                     keep=preset.keep_checkpoints,
                     noise_ema=noise_ema)
 
