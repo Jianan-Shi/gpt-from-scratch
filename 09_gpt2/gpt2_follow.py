@@ -607,7 +607,12 @@ if args.eval_interval is not None:
 total_batch_size, B, T = preset.total_batch_size, preset.B, preset.T
 warmup_steps, max_steps = preset.warmup_steps, preset.max_steps
 eval_interval, use_compile = preset.eval_interval, preset.use_compile
-assert total_batch_size % (B * T * ddp_world_size) == 0, "make sure total_batch_size is divisible by B*T*ddp_world_size"
+if total_batch_size % (B * T * ddp_world_size) != 0:
+    # B has to divide total_batch_size / (T * world). Saying which values do beats
+    # making the reader factorise 524288 at the command line.
+    ok = [b for b in (1, 2, 4, 8, 16, 32, 64, 128, 256) if total_batch_size % (b * T * ddp_world_size) == 0]
+    raise SystemExit(f"B={B} does not divide total_batch_size={total_batch_size} "
+                     f"at T={T} x {ddp_world_size} process(es). Valid: {ok}")
 grad_accum_steps = total_batch_size // (B * T * ddp_world_size)
 val_loss_steps = max(1, preset.val_tokens // (B * T * ddp_world_size)) # per process
 torch.manual_seed(args.seed) # after argparse: --seed has to be known first
