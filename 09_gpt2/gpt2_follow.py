@@ -763,7 +763,10 @@ for step in range(start_step, max_steps):
     tokens_per_sec = tokens_processed / dt
     if master_process:
         noise_col = f" | B_simple: {b_simple:,.0f}" if math.isfinite(b_simple) else ""
-        print(f"step {step:5d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}{noise_col}")
+        # peak memory answers "does this B fit on this card" straight from the log,
+        # which is the first thing you need to know on a machine you just rented
+        mem_col = f" | mem: {torch.cuda.max_memory_allocated() / 2**30:.1f}GB" if device_type == "cuda" else ""
+        print(f"step {step:5d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}{mem_col}{noise_col}")
         with open(log_file, "a") as f:
             f.write(f"{step} train {loss_accum.item():.6f}\n")
 
