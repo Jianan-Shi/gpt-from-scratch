@@ -648,3 +648,113 @@ def test_qk_norm_model_starts_at_the_uniform_loss():
         _, loss = model(idx, targets)
 
     assert abs(loss.item() - math.log(TINY.vocab_size)) < 0.15
+
+
+# ---------------------------------------------------------------------------------------
+# GQA (grouped query attention)
+
+
+def test_gqa_with_one_kv_per_head_is_exactly_mha():
+    """n_kv_head = n_head 时必须和标准多头逐元素相同——这是所有 GQA 实现的第一关。"""
+    torch.manual_seed(0)
+    mha = CausalSelfAttention(GPTConfig(**{**TINY.__dict__, "n_kv_head": None})).eval()
+    torch.manual_seed(0)
+    gqa = CausalSelfAttention(GPTConfig(**{**TINY.__dict__, "n_kv_head": TINY.n_head})).eval()
+    x = torch.randn(2, 16, TINY.n_embd)
+
+    with torch.no_grad():
+        assert torch.equal(mha(x), gqa(x))
+
+
+def test_gqa_groups_query_heads_contiguously():
+    """分组映射：query 头 0..(nh/n_kv - 1) 用 kv 头 0，依此类推。
+
+    也就是 repeat_interleave，不是 repeat。这两个搞反了模型照样能训，loss 也会降，
+    只是每个头配错了 K/V——最典型的静默 bug，所以这里手工展开一遍对拍。
+    """
+    torch.manual_seed(0)
+    n_kv = 2
+    cfg = GPTConfig(**{**TINY.__dict__, "n_kv_head": n_kv}) # TINY: n_head=2 -> 取 1 组 2 头
+    cfg = GPTConfig(**{**TINY.__dict__, "n_head": 4, "n_kv_head": n_kv, "n_embd": 32})
+    attn = CausalSelfAttention(cfg).eval()
+    x = torch.randn(2, 16, cfg.n_embd)
+
+    with torch.no_grad():
+        B, T, C = x.shape
+        hs = cfg.n_embd // cfg.n_head
+        q, k, v = attn.c_attn(x).split([C, n_kv * hs, n_kv * hs], dim=2)
+        q = q.view(B, T, cfg.n_head, hs).transpose(1, 2)
+        k = k.view(B, T, n_kv, hs).transpose(1, 2)
+        v = v.view(B, T, n_kv, hs).transpose(1, 2)
+
+        repeats = cfg.n_head // n_kv
+        expanded = F.scaled_dot_product_attention(
+            q, k.repeat_interleave(repeats, dim=1), v.repeat_interleave(repeats, dim=1),
+            is_causal=True)
+        expected = attn.c_proj(expanded.transpose(1, 2).contiguous().view(B, T, C))
+
+        assert torch.allclose(attn(x), expected, atol=1e-5)
+
+        # 对照：repeat 而不是 repeat_interleave，映射就错了
+        wrong = F.scaled_dot_product_attention(
+            q, k.repeat(1, repeats, 1, 1), v.repeat(1, repeats, 1, 1), is_causal=True)
+        assert not torch.allclose(expanded, wrong, atol=1e-3)
+
+
+def test_gqa_requires_the_head_count_to_divide():
+    try:
+        CausalSelfAttention(GPTConfig(**{**TINY.__dict__, "n_head": 4, "n_embd": 32, "n_kv_head": 3}))
+    except AssertionError:
+        return
+    raise AssertionError("n_head 不能被 n_kv_head 整除时必须报错")
+
+
+def test_gqa_shrinks_the_kv_cache_proportionally():
+    """GQA 真正换来的东西：推理时每个 token 要缓存的 K/V。
+
+    12 头 -> 36KB/token，4 头 -> 12KB/token。同样的显存能装 3 倍长的上下文。
+    """
+    real = GPTConfig(vocab_size=50304) # n_layer=12, n_head=12, n_embd=768
+
+    def kv_kb(n_kv):
+        return 2 * real.n_layer * n_kv * (real.n_embd // real.n_head) * 2 / 1024
+
+    assert kv_kb(12) == 36.0
+    assert kv_kb(4) == 12.0
+    assert kv_kb(1) == 3.0
+
+
+def test_gqa_also_removes_parameters():
+    """c_attn 变窄，所以这一行不是等参数量比较——读结果时必须记得。"""
+    mha = GPT(GPTConfig(vocab_size=1024, n_layer=2, n_head=12, n_embd=768, block_size=64))
+    gqa = GPT(GPTConfig(vocab_size=1024, n_layer=2, n_head=12, n_embd=768, block_size=64, n_kv_head=4))
+
+    n_mha = sum(p.numel() for p in mha.parameters())
+    n_gqa = sum(p.numel() for p in gqa.parameters())
+    per_layer = 2 * (12 - 4) * 64 * 768 + 2 * (12 - 4) * 64 # 权重 + bias
+
+    assert n_mha - n_gqa == 2 * per_layer
+
+
+def test_gqa_keeps_attention_causal():
+    torch.manual_seed(0)
+    attn = CausalSelfAttention(GPTConfig(**{**TINY.__dict__, "n_head": 4, "n_embd": 32,
+                                           "n_kv_head": 2})).eval()
+    x = torch.randn(1, 16, 32)
+    y = x.clone()
+    y[:, 8:] = torch.randn(1, 8, 32)
+
+    with torch.no_grad():
+        assert torch.allclose(attn(x)[:, :8], attn(y)[:, :8], atol=1e-6)
+
+
+def test_gqa_model_starts_at_the_uniform_loss():
+    torch.manual_seed(0)
+    model = GPT(GPTConfig(**{**TINY.__dict__, "n_kv_head": 1})).eval()
+    idx = torch.randint(0, TINY.vocab_size, (4, 16))
+    targets = torch.randint(0, TINY.vocab_size, (4, 16))
+
+    with torch.no_grad():
+        _, loss = model(idx, targets)
+
+    assert abs(loss.item() - math.log(TINY.vocab_size)) < 0.15

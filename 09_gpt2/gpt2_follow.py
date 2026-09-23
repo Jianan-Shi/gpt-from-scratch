@@ -11,12 +11,31 @@ from hellaswag import render_example, iterate_examples
 # -----------------------------------------------------------------------------
 
 class CausalSelfAttention(nn.Module):
+    """因果自注意力，可选 GQA（Grouped Query Attention）。
+
+    标准多头：每个 query 头配一套自己的 K/V。GQA 让若干个 query 头**共用**一套 K/V，
+    n_kv_head=1 时退化成 MQA（所有头共用一套）。
+
+    它省的不是训练时的算力，而是**推理时的 KV cache**。生成时每个已生成的 token 都要
+    把 K/V 留在显存里，占用 = 2 * n_layer * n_kv_head * head_size * 2字节/token。
+    12 头全存是 36KB/token，4 头只要 12KB/token——同样的显存能装 3 倍长的上下文，
+    或 3 倍多的并发请求。Llama-2 70B 起、Mistral、Qwen 都用 GQA。
+
+    代价有两个，都要在消融里看清楚：K/V 表达力下降可能让 loss 略差；而且因为
+    c_attn 变窄，**参数量也跟着少了**，所以这一行不是等参数量比较——它是一个
+    权衡（loss 换显存），不是纯粹的改进。
+    """
 
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0
-        # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
+        head_size = config.n_embd // config.n_head
+        self.n_kv_head = config.n_kv_head or config.n_head
+        assert config.n_head % self.n_kv_head == 0, \
+            f"n_head={config.n_head} 必须能被 n_kv_head={self.n_kv_head} 整除"
+        self.head_size = head_size
+        # q 仍是 n_head 套，k/v 各只有 n_kv_head 套
+        self.c_attn = nn.Linear(config.n_embd, config.n_embd + 2 * self.n_kv_head * head_size)
         # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
         self.c_proj.NANOGPT_SCALE_INIT = 1
@@ -43,10 +62,11 @@ class CausalSelfAttention(nn.Module):
     def forward(self, x):
         B, T, C = x.size()
         qkv = self.c_attn(x)
-        q, k, v = qkv.split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        kv_width = self.n_kv_head * self.head_size
+        q, k, v = qkv.split([C, kv_width, kv_width], dim=2)
+        q = q.view(B, T, self.n_head, self.head_size).transpose(1, 2)    # (B, nh, T, hs)
+        k = k.view(B, T, self.n_kv_head, self.head_size).transpose(1, 2) # (B, n_kv, T, hs)
+        v = v.view(B, T, self.n_kv_head, self.head_size).transpose(1, 2) # (B, n_kv, T, hs)
         if self.qk_norm:
             # 在最后一维（head_size）上归一化，所以每个头、每个位置各自归一化。
             # 点积因此只取决于 q 和 k 的**方向**，不取决于它们的长度。
@@ -57,7 +77,11 @@ class CausalSelfAttention(nn.Module):
         # att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf')) # (needed the removed bias buffer)
         # att = F.softmax(att, dim=-1)
         # y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        # enable_gqa 让内核直接处理 n_kv < nh 的情形，不用先把 K/V 复制成 nh 份。
+        # 分组方式是连续切分：query 头 0..(nh/n_kv-1) 用 kv 头 0，依此类推，
+        # 也就是 repeat_interleave 而不是 repeat——测试里把这个映射钉死了。
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True,
+                                           enable_gqa=self.n_kv_head != self.n_head)
 
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         # output projectioin
@@ -199,6 +223,7 @@ class GPTConfig:
     norm: str = "layernorm" # layernorm | rmsnorm
     mlp: str = "gelu"       # gelu | swiglu
     qk_norm: bool = False   # normalise q and k before the dot product
+    n_kv_head: int = None   # None = one K/V per query head (standard MHA)
 
 class GPT(nn.Module):
 
@@ -612,6 +637,7 @@ parser.add_argument("--norm", choices=["layernorm", "rmsnorm"], default=None,
                     help="architecture switch; default keeps the GPT-2 baseline")
 parser.add_argument("--mlp", choices=["gelu", "swiglu"], default=None)
 parser.add_argument("--qk-norm", dest="qk_norm", default=None, action=argparse.BooleanOptionalAction)
+parser.add_argument("--n-kv-head", dest="n_kv_head", type=int, default=None)
 parser.add_argument("--seed", type=int, default=1337)
 parser.add_argument("--tag", default=None, help="appended to the run directory name")
 parser.add_argument("--eval-interval", type=int, default=None)
@@ -682,7 +708,8 @@ if resume_path is not None:
 
 # create model
 arch = {k: v for k, v in (("norm", args.norm), ("mlp", args.mlp),
-                          ("qk_norm", args.qk_norm)) if v is not None}
+                          ("qk_norm", args.qk_norm), ("n_kv_head", args.n_kv_head))
+        if v is not None}
 if master_process and arch:
     print(f"architecture overrides: {arch}")
 model = GPT(GPTConfig(vocab_size=50304, **arch))
@@ -748,6 +775,13 @@ if master_process:
     import shutil
     shutil.copy(__file__, log_dir)
     print(f"logging to {log_dir}")
+    # GQA 换的是推理时的 KV cache，不是 loss，所以这两个数要和 loss 记在一起，
+    # 否则消融表会把一个权衡读成一次退步。
+    cfg = eval_model.config
+    kv_bytes_per_token = 2 * cfg.n_layer * (cfg.n_kv_head or cfg.n_head) * (cfg.n_embd // cfg.n_head) * 2
+    with open(log_file, "a") as f:
+        f.write(f"0 params {sum(p.numel() for p in eval_model.parameters())}\n")
+        f.write(f"0 kvcache_kb {kv_bytes_per_token / 1024:.1f}\n")
 
 # [noise scale] single-step estimates are far too noisy to use directly, so the
 # numerator and denominator are smoothed separately and only then divided.

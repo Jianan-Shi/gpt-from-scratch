@@ -46,6 +46,8 @@ def parse_run(run_dir):
         "bsimple": streams.get("bsimple", {}).get(max(streams.get("bsimple", {0: 0}))),
         "tok_per_sec": None,
         "mem": None,
+        "params": streams.get("params", {}).get(0),
+        "kvcache": streams.get("kvcache_kb", {}).get(0),
     }
 
     # tok/s 和显存只在 stdout 里：按 tag 找同名日志
@@ -73,15 +75,17 @@ def main(steps_filter):
         return
     runs.sort(key=lambda r: r["val"])
 
-    print(f"| {'run':<34} | steps | val loss | best  | HellaSwag | tok/s   | mem    | B_simple |")
-    print(f"|{'-' * 36}|-------|----------|-------|-----------|---------|--------|----------|")
+    print(f"| {'run':<24} | steps | val loss | HellaSwag | tok/s   | mem    | params  | KV/tok |")
+    print(f"|{'-' * 26}|-------|----------|-----------|---------|--------|---------|--------|")
     for r in runs:
         hella = f"{r['hella']:.4f}" if r["hella"] is not None else "   -   "
         rate = f"{r['tok_per_sec']:,.0f}" if r["tok_per_sec"] else "   -   "
         mem = f"{r['mem']:.1f}GB" if r["mem"] else "  -   "
         bs = f"{r['bsimple']:,.0f}" if r["bsimple"] else "   -   "
-        print(f"| {r['tag'] or r['run']:<34} | {r['steps']:>5} | {r['val']:.4f}   | "
-              f"{r['val_best']:.4f} | {hella:>9} | {rate:>7} | {mem:>6} | {bs:>8} |")
+        params = f"{r['params'] / 1e6:.1f}M" if r["params"] else "   -   "
+        kv = f"{r['kvcache']:.0f}KB" if r["kvcache"] else "  -   "
+        print(f"| {r['tag'] or r['run']:<24} | {r['steps']:>5} | {r['val']:.4f}   | "
+              f"{hella:>9} | {rate:>7} | {mem:>6} | {params:>7} | {kv:>6} |")
 
     # 噪声底线：tag 以 base 开头的那些 run 之间的差距
     baselines = [r for r in runs if r["tag"].startswith("base")]
