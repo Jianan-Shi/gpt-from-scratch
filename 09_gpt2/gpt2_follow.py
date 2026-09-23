@@ -487,6 +487,8 @@ parser.add_argument("--resume", default=None, metavar="PATH|auto",
 # overrides for shakedown runs: use the real batch geometry of a preset but stop early,
 # e.g. --preset 4090x2 --max-steps 20 measures true peak memory and throughput in a minute
 parser.add_argument("--max-steps", type=int, default=None)
+parser.add_argument("--warmup-steps", type=int, default=None,
+                    help="keep it near 3.75%% of max-steps, as in the original 715/19073")
 parser.add_argument("--eval-interval", type=int, default=None)
 args = parser.parse_args()
 preset = PRESETS[args.preset]
@@ -494,6 +496,8 @@ if args.use_compile is not None:
     preset = replace(preset, use_compile=args.use_compile)
 if args.max_steps is not None:
     preset = replace(preset, max_steps=args.max_steps)
+if args.warmup_steps is not None:
+    preset = replace(preset, warmup_steps=args.warmup_steps)
 if args.eval_interval is not None:
     preset = replace(preset, eval_interval=args.eval_interval)
 
