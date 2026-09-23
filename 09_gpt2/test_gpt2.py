@@ -13,7 +13,7 @@ from torch.nn import functional as F
 _SRC = open(__file__.replace("test_gpt2.py", "gpt2_follow.py")).read()
 _DEFS = {"__name__": "gpt2_defs"}
 exec(_SRC[: _SRC.index("# run the training loop")], _DEFS)
-CausalSelfAttention = _DEFS["CausalSelfAttention"]
+CausalSelfAttention, RMSNorm = _DEFS["CausalSelfAttention"], _DEFS["RMSNorm"]
 gradient_noise_scale = _DEFS["gradient_noise_scale"]
 save_checkpoint, prune_checkpoints = _DEFS["save_checkpoint"], _DEFS["prune_checkpoints"]
 GPT, GPTConfig = _DEFS["GPT"], _DEFS["GPTConfig"]
@@ -334,3 +334,101 @@ def test_4090_preset_keeps_the_recipe_and_fits_24gb():
     assert p.val_tokens == original.val_tokens # 同一把尺子，才和基线可比
     assert p.B == 16 and p.total_batch_size % (p.B * p.T * 2) == 0
     assert p.total_batch_size // (p.B * p.T * 2) == 16 # 2 卡，每卡累积 16 次
+
+
+# ---------------------------------------------------------------------------------------
+# RMSNorm
+
+
+def test_rmsnorm_matches_torchs_implementation():
+    """和 torch.nn.RMSNorm 对拍——手写实现是否真的是 RMSNorm，由标准实现说了算。"""
+    torch.manual_seed(0)
+    dim = 64
+    mine, theirs = RMSNorm(dim), torch.nn.RMSNorm(dim, eps=1e-5)
+    with torch.no_grad(): # 两边的 gain 都是 1，但显式设一遍更清楚
+        mine.weight.copy_(torch.ones(dim))
+        theirs.weight.copy_(torch.ones(dim))
+    x = torch.randn(4, 16, dim) * 3 + 2
+
+    assert torch.allclose(mine(x), theirs(x), atol=1e-5)
+
+
+def test_rmsnorm_is_scale_invariant_up_to_eps():
+    """RMSNorm 的全部作用就是这个：输入整体放大 c 倍，输出不变。
+    LayerNorm 也有这个性质，而这正是它真正起作用的部分。
+
+    但"不变"只在 mean(x^2) >> eps 时成立。把输入缩小 10 倍，mean(x^2) 小 100 倍，
+    eps 就不再可以忽略——写这个测试时就是在这里翻的车。真实的残差流量级远大于
+    1e-5，所以不影响训练，但知道边界在哪里才算理解这个公式。
+    """
+    torch.manual_seed(0)
+    norm = RMSNorm(32, eps=1e-5)
+    x = torch.randn(2, 8, 32) # mean(x^2) ~ 1，eps 可忽略
+
+    with torch.no_grad():
+        assert torch.allclose(norm(x), norm(x * 7.0), atol=1e-5)
+        assert torch.allclose(norm(x), norm(x * 100.0), atol=1e-5)
+
+        shrunk = norm(x * 0.1) # mean(x^2) ~ 0.01，eps 开始显形
+        assert not torch.allclose(norm(x), shrunk, atol=1e-5)
+        assert torch.allclose(norm(x), shrunk, atol=1e-2), "偏差应当只有 eps 量级"
+
+
+def test_rmsnorm_is_not_shift_invariant_but_layernorm_is():
+    """这一条就是 RMSNorm 和 LayerNorm 的全部差别：它不再免疫常数偏移。
+
+    去掉减均值省下了一次全量归约，代价就写在这里。残差流的均值接近 0 时代价很小，
+    但"很小"是需要实测的——这正是消融要回答的。
+    """
+    torch.manual_seed(0)
+    rms, ln = RMSNorm(32), torch.nn.LayerNorm(32)
+    x = torch.randn(2, 8, 32)
+    shifted = x + 5.0
+
+    with torch.no_grad():
+        assert torch.allclose(ln(x), ln(shifted), atol=1e-4), "LayerNorm 免疫平移"
+        assert not torch.allclose(rms(x), rms(shifted), atol=1e-2), "RMSNorm 不免疫"
+
+
+def test_rmsnorm_keeps_the_input_dtype():
+    """归约在 fp32 里做（bf16 下 x^2 会丢精度），但输出必须还是 bf16，
+    否则后面的 matmul 会悄悄退回 fp32，训练变慢而没人发现。"""
+    norm = RMSNorm(32)
+    x = torch.randn(2, 8, 32, dtype=torch.bfloat16)
+
+    assert norm(x).dtype == torch.bfloat16
+
+
+def test_rmsnorm_model_drops_the_bias_parameters():
+    """每个 norm 省掉 n_embd 个 bias。25 处 norm × 768 = 19,200 个参数。"""
+    base = GPT(GPTConfig(**{**TINY.__dict__, "norm": "layernorm"}))
+    rms = GPT(GPTConfig(**{**TINY.__dict__, "norm": "rmsnorm"}))
+
+    n_base = sum(p.numel() for p in base.parameters())
+    n_rms = sum(p.numel() for p in rms.parameters())
+    n_norms = 2 * TINY.n_layer + 1 # 每个 block 两处，加最后的 ln_f
+
+    assert n_base - n_rms == n_norms * TINY.n_embd
+
+
+def test_rmsnorm_model_starts_at_the_uniform_loss():
+    """换了归一化层，初始 loss 仍应落在 ln(vocab)——否则是接线接错了。"""
+    torch.manual_seed(0)
+    model = GPT(GPTConfig(**{**TINY.__dict__, "norm": "rmsnorm"})).eval()
+    idx = torch.randint(0, TINY.vocab_size, (4, 16))
+    targets = torch.randint(0, TINY.vocab_size, (4, 16))
+
+    with torch.no_grad():
+        _, loss = model(idx, targets)
+
+    assert abs(loss.item() - math.log(TINY.vocab_size)) < 0.15
+
+
+def test_rmsnorm_gain_is_not_weight_decayed():
+    """1 维参数不该被权重衰减——RMSNorm 的 gain 和 LayerNorm 的 gamma 一样。"""
+    model = GPT(GPTConfig(**{**TINY.__dict__, "norm": "rmsnorm"}))
+    optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=1e-3, device="cpu")
+
+    decay_group = optimizer.param_groups[0]
+    assert decay_group["weight_decay"] == 0.1
+    assert all(p.dim() >= 2 for p in decay_group["params"]), "gain 混进了衰减组"

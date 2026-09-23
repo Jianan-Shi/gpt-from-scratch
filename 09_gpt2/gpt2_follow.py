@@ -65,13 +65,48 @@ class MLP(nn.Module):
         return x
 
 
+class RMSNorm(nn.Module):
+    """LayerNorm 去掉减均值和 bias，只按均方根缩放。
+
+    LayerNorm:  (x - mean) / sqrt(var + eps) * gamma + beta
+    RMSNorm:    x / sqrt(mean(x^2) + eps) * gamma
+
+    它回答的问题是"减均值到底有没有必要"。Zhang & Sennrich (2019) 的观察是：
+    LayerNorm 起作用的是**缩放不变性**（让每层输出的尺度稳定），而不是**平移不变性**，
+    所以减均值那一步可以省掉。省下的是每层两次全量归约（求均值、再求方差）中的一次，
+    以及 n_embd 个 bias 参数。Llama、Qwen、Gemma 现在都用它。
+
+    代价是失去了对输入常数偏移的免疫：LayerNorm(x + c) == LayerNorm(x)，
+    但 RMSNorm(x + c) != RMSNorm(x)。实践中残差流的均值本来就接近 0，
+    所以这个代价很小——这正是消融要量的东西。
+    """
+
+    def __init__(self, dim, eps=1e-5):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        # 在 fp32 里做归约：bf16 下 x^2 容易丢精度，而这一步每层都要过。
+        # 乘完 gain 之后再转回输入的 dtype——先转回去的话 bf16 会被 fp32 的 weight
+        # 提升回 fp32，后面的 matmul 跟着退回 fp32，训练变慢而没有任何报错。
+        dtype = x.dtype
+        x = x.float()
+        x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return (x * self.weight).to(dtype)
+
+
+def make_norm(config):
+    return RMSNorm(config.n_embd) if config.norm == "rmsnorm" else nn.LayerNorm(config.n_embd)
+
+
 class Block(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.ln_1 = nn.LayerNorm(config.n_embd)
+        self.ln_1 = make_norm(config)
         self.attn = CausalSelfAttention(config)
-        self.ln_2 = nn.LayerNorm(config.n_embd)
+        self.ln_2 = make_norm(config)
         self.mlp = MLP(config)
 
     def forward(self, x):
@@ -86,6 +121,10 @@ class GPTConfig:
     n_layer: int = 12 # number of layers
     n_head: int = 12 # number of heads
     n_embd: int = 768 # embedding dimension
+    # --- architecture switches, one per ablation ---------------------------------------
+    # One codebase, one training path, one flag apart between any two runs: that is what
+    # makes the comparison a controlled experiment rather than two different programs.
+    norm: str = "layernorm" # layernorm | rmsnorm
 
 class GPT(nn.Module):
 
@@ -97,7 +136,7 @@ class GPT(nn.Module):
             wte = nn.Embedding(config.vocab_size, config.n_embd), 
             wpe = nn.Embedding(config.block_size, config.n_embd),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = nn.LayerNorm(config.n_embd),
+            ln_f = make_norm(config),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
@@ -187,6 +226,8 @@ class GPT(nn.Module):
         return model
 
     def configure_optimizers(self, weight_decay, learning_rate, device):
+        # note: grouping is by dim() >= 2, so RMSNorm's gain lands in the no-decay group
+        # automatically, exactly like LayerNorm's gamma/beta did.
         # start with all of the candidate parameters (that require grad)
         param_dict = {pn: p for pn, p in self.named_parameters()}
         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
@@ -489,6 +530,8 @@ parser.add_argument("--warmup-steps", type=int, default=None,
                     help="keep it near 3.75%% of max-steps, as in the original 715/19073")
 # The data order is fixed by the loader, so --seed varies initialisation only. That is
 # the noise floor an ablation table needs: two runs of the same config, different seed.
+parser.add_argument("--norm", choices=["layernorm", "rmsnorm"], default=None,
+                    help="architecture switch; default keeps the GPT-2 baseline")
 parser.add_argument("--seed", type=int, default=1337)
 parser.add_argument("--tag", default=None, help="appended to the run directory name")
 parser.add_argument("--eval-interval", type=int, default=None)
@@ -551,7 +594,10 @@ if resume_path is not None:
         print(f"resuming from {resume_path} at step {resume_ckpt['step']}")
 
 # create model
-model = GPT(GPTConfig(vocab_size=50304))
+arch = {k: v for k, v in (("norm", args.norm),) if v is not None}
+if master_process and arch:
+    print(f"architecture overrides: {arch}")
+model = GPT(GPTConfig(vocab_size=50304, **arch))
 model.to(device)
 if use_compile:
     model = torch.compile(model)
