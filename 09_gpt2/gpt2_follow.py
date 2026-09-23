@@ -230,7 +230,12 @@ class DataLoaderLite:
         assert split in {'train', 'val'}
 
         # get the shard filenames
-        data_root = "../build-nanogpt/edu_fineweb10B"
+        # [portable] a path into an untracked local clone is not reproducible on another
+        # machine. Order: $GPT2_DATA_ROOT, then shards made here by prep_shards.py, then
+        # the build-nanogpt clone this project originally borrowed them from.
+        data_root = next((d for d in (os.environ.get("GPT2_DATA_ROOT"), "edu_fineweb10B",
+                                      "../build-nanogpt/edu_fineweb10B") if d and os.path.isdir(d)), None)
+        assert data_root is not None, "no shards found; run: python prep_shards.py --shards 2"
         shards = os.listdir(data_root)
         shards = [s for s in shards if split in s]
         shards = sorted(shards)
