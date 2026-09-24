@@ -8,6 +8,7 @@ usage: python eval_gpt2_baseline.py [model_name_or_checkpoint.pt]
        defaults to "gpt2" (the 124M checkpoint from OpenAI via HuggingFace)
 """
 import glob
+import os
 import sys
 import time
 
@@ -24,9 +25,17 @@ exec(_src[: _src.index("# run the training loop")], _defs)
 GPT, GPTConfig = _defs["GPT"], _defs["GPTConfig"]
 get_most_likely_row = _defs["get_most_likely_row"]
 
-VAL_SHARD = sorted(glob.glob("../build-nanogpt/edu_fineweb10B/*val*"))[0]
+# same resolution order as gpt2_follow.py: a path into an untracked clone is not
+# reproducible on another machine
+DATA_ROOT = next((d for d in (os.environ.get("GPT2_DATA_ROOT"), "edu_fineweb10B",
+                              "../build-nanogpt/edu_fineweb10B") if d and os.path.isdir(d)), None)
+assert DATA_ROOT, "no shards found; run: python prep_shards.py --shards 2"
+VAL_SHARD = sorted(glob.glob(os.path.join(DATA_ROOT, "*val*")))[0]
 B, T = 4, 1024
-VAL_STEPS = 320 # 320 * 4 * 1024 = 1.31M tokens, the same slice Karpathy's 20 steps at B=64 covered
+# 1.31M tokens by default: the slice Karpathy's 20 steps at B=64 covered, and the one
+# our 3.2799 for OpenAI's checkpoint was measured on. Training-time val uses 10.5M, a
+# different slice, so the two numbers are not interchangeable — hence the flag.
+VAL_STEPS = int(os.environ.get("VAL_TOKENS", 1_310_720)) // (B * T)
 
 
 def evaluate(model, device="cuda"):

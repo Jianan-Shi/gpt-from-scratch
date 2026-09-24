@@ -1130,7 +1130,9 @@ for step in range(start_step, max_steps):
         for key, val in (("g2", g2), ("s", s_est)):
             prev = noise_ema[key]
             noise_ema[key] = val if prev is None else NOISE_BETA * prev + (1 - NOISE_BETA) * val
-        if noise_ema["g2"] > 0:
+        # 两个 EMA 都要为正才有意义：单步估计已经过滤过，但平滑之后的比值仍可能为负
+        # （10B 那次日志开头就出现过 -392），负的 B_simple 没有任何解释
+        if noise_ema["g2"] > 0 and noise_ema["s"] > 0:
             b_simple = noise_ema["s"] / noise_ema["g2"]
         if master_process and math.isfinite(b_simple):
             with open(log_file, "a") as f:
