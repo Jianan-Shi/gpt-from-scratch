@@ -1161,7 +1161,12 @@ for step in range(start_step, max_steps):
         mem_col = f" | mem: {torch.cuda.max_memory_allocated() / 2**30:.1f}GB" if device_type == "cuda" else ""
         print(f"step {step:5d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}{mem_col} | eta: {eta}{noise_col}")
         with open(log_file, "a") as f:
+            # 吞吐和显存也写进来：原来只在 stdout 里，而 stdout 的文件名按 tag 拼，
+            # 同 tag 跑两次就会互相覆盖，表格里出现张冠李戴的数字。run 目录要自包含。
             f.write(f"{step} train {loss_accum.item():.6f}\n")
+            f.write(f"{step} toks {tokens_per_sec:.0f}\n")
+            if device_type == "cuda":
+                f.write(f"{step} mem {torch.cuda.max_memory_allocated() / 2**30:.2f}\n")
 
 if ddp:
     destroy_process_group()

@@ -50,19 +50,23 @@ def parse_run(run_dir):
         "kvcache": streams.get("kvcache_kb", {}).get(0),
     }
 
-    # tok/s 和显存只在 stdout 里：按 tag 找同名日志
-    for candidate in (f"{tag}.log", os.path.join(run_dir, "stdout.log")):
-        if candidate and os.path.exists(candidate):
-            rates, mems = [], []
-            for line in open(candidate):
-                if m := re.search(r"tok/sec: ([\d.]+)", line):
-                    rates.append(float(m.group(1)))
-                if m := re.search(r"mem: ([\d.]+)GB", line):
-                    mems.append(float(m.group(1)))
-            if rates:
-                out["tok_per_sec"] = statistics.median(rates[1:] or rates) # 第一步含编译预热
-                out["mem"] = max(mems) if mems else None
-            break
+    # 优先用 log.txt 里的（自包含）；旧的 run 没有这两个流，再退回 stdout 文件
+    rates = sorted(streams.get("toks", {}).items())[1:] # 第一步含编译预热
+    if rates:
+        out["tok_per_sec"] = statistics.median(v for _, v in rates)
+        out["mem"] = max(streams.get("mem", {0: 0}).values()) or None
+    else:
+        log = f"{tag}.log"
+        if os.path.exists(log):
+            r, m = [], []
+            for line in open(log):
+                if hit := re.search(r"tok/sec: ([\d.]+)", line):
+                    r.append(float(hit.group(1)))
+                if hit := re.search(r"mem: ([\d.]+)GB", line):
+                    m.append(float(hit.group(1)))
+            if r:
+                out["tok_per_sec"], out["mem"] = statistics.median(r[1:] or r), (max(m) if m else None)
+                out["stale"] = True # 来自按 tag 拼的文件名，同 tag 跑过两次就可能张冠李戴
     return out
 
 
@@ -74,6 +78,7 @@ def main(steps_filter):
         print("no runs found")
         return
     runs.sort(key=lambda r: r["val"])
+    tags = [r["tag"] for r in runs] # 用于检测同 tag 的重复运行
 
     print(f"| {'run':<24} | steps | val loss | HellaSwag | tok/s   | mem    | params  | KV/tok |")
     print(f"|{'-' * 26}|-------|----------|-----------|---------|--------|---------|--------|")
@@ -84,7 +89,9 @@ def main(steps_filter):
         bs = f"{r['bsimple']:,.0f}" if r["bsimple"] else "   -   "
         params = f"{r['params'] / 1e6:.1f}M" if r["params"] else "   -   "
         kv = f"{r['kvcache']:.0f}KB" if r["kvcache"] else "  -   "
-        print(f"| {r['tag'] or r['run']:<24} | {r['steps']:>5} | {r['val']:.4f}   | "
+        label = r["tag"] if tags.count(r["tag"]) == 1 else r["run"][4:] # 撞名就显示时间戳
+        rate = rate + "?" if r.get("stale") and r["tok_per_sec"] else rate
+        print(f"| {label:<24} | {r['steps']:>5} | {r['val']:.4f}   | "
               f"{hella:>9} | {rate:>7} | {mem:>6} | {params:>7} | {kv:>6} |")
 
     # 噪声底线：tag 以 base 开头的那些 run 之间的差距
