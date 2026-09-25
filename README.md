@@ -15,7 +15,8 @@ numbers stay comparable across chapters.
 | 06 | WaveNet-style tree, 8-char context | 76,579 | **2.8977 bpc** | 2.9769 the 03 MLP |
 | 07 | 6-layer Transformer, tiny Shakespeare | 10.8M | 2.1597 bpc (best) | own corpus, 6.022 uniform |
 | 08 | BPE tokenizer from scratch | — | 3.21 bytes/token @ vocab 1536 | 1.0, raw bytes |
-| 09 | **GPT-2 124M, trained on one RTX 4060 8GB** | 124M | **3.5475 nats/token**, HellaSwag **0.2634** | 3.2799 / 0.2976 — OpenAI's checkpoint, measured here |
+| 09 | GPT-2 124M reproduction, 10B tokens on 2x RTX 4090 | 124M | **3.0778 nats/token**, HellaSwag **0.3012** | 3.2799 / 0.2976 — OpenAI's checkpoint, measured here |
+| 09 | + RoPE, SwiGLU, RMSNorm, GQA, Muon | 114M | **3.0429**, HellaSwag **0.3140** | 3.0778 / 0.3012 — the baseline above |
 
 Chapters 02–05 are character-level on names, scored in bits per character against a
 shared split. Chapter 09 is a different corpus, tokenizer and unit; it is scored against
@@ -41,7 +42,7 @@ Setup:
 
 ```bash
 pip install -e .      # editable install of nnzh/, so `from nnzh.data import ...` works anywhere
-pytest                # 87 tests across all chapters
+pytest                # 144 tests across all chapters
 ```
 
 ## 02 — Bigram language model
@@ -335,136 +336,122 @@ python experiments_bpe.py          # ~2 min
 
 GPT-2's 50257-token BPE vocabulary and 1024-token context, weights loadable from
 OpenAI's released 124M checkpoint, the GPT-3 paper's optimiser settings, FineWeb-Edu
-for training and HellaSwag for evaluation. Chapter 07 already had a correct
-Transformer; this chapter rebuilds everything around it.
+for training and HellaSwag for evaluation.
 
-**Trained on one RTX 4060 8GB — the lecture uses 8×A100 40GB, about 80x the memory.**
+Trained twice on 10B tokens on 2x RTX 4090 (borrowed), about eleven hours each, plus
+fourteen 500M-token ablation runs. Every number below was measured by the same code on
+the same tokens ([`eval_gpt2_baseline.py`](09_gpt2/eval_gpt2_baseline.py)), including
+OpenAI's checkpoint, so the comparisons are controlled rather than quoted.
 
-| | ours | OpenAI GPT-2 124M |
-|---|---|---|
-| val loss (FineWeb-Edu, 1.31M tokens) | **3.5475** | 3.2799 |
-| HellaSwag | **0.2634** | 0.2976 |
-| tokens seen | 655M | ~100B (WebText) |
-| wall clock | 8.8h, 10,000 steps, 22K tok/s | — |
+| | val loss | HellaSwag | params | KV cache | tok/s |
+|---|---|---|---|---|---|
+| OpenAI GPT-2 124M | 3.2799 | 0.2976 | 124.5M | 36KB/token | — |
+| this repo, 10B tokens | 3.0778 | 0.3012 | 124.5M | 36KB/token | 250K |
+| **+ RoPE, SwiGLU, RMSNorm, GQA, Muon** | **3.0429** | **0.3140** | **114.2M** | **12KB/token** | **257K** |
 
-Both rows were measured by the same code on the same tokens
-([`09_gpt2/eval_gpt2_baseline.py`](09_gpt2/eval_gpt2_baseline.py)) rather than quoted,
-so the 0.27 nat gap is a controlled comparison. It buys 6.5% of the original token
-budget. ![training curves](figures/gpt2_curves.png)
+Both runs beat the released checkpoint on 10% of its training tokens, which is the
+lecture's own result and comes from FineWeb-Edu being better data than WebText.
 
-Two initialisation details chapter 07 skipped: weight tying between `wte` and
-`lm_head`, worth 38M of the 124M parameters, and scaling the residual projections by
-`(2 * n_layer) ** -0.5`.
+### The ablation, and what it got wrong
 
-Beyond the lecture:
+Six modern components, each behind a flag on `GPTConfig`, each with tests that assert
+the property it exists for, each measured alone against the baseline at 500M tokens
+with a seed-noise floor of 0.0088 established from two baseline seeds.
 
-- **Update count, not token count, was the binding constraint.** Compared at the same
-  147M tokens on the same GPU, the lecture's 2^19-token batch (280 updates) reaches
-  6.00 val loss where a 2^16-token batch (~2,240 updates) reaches ~4.15. Same data,
-  same FLOPs, 1.85 nats apart: a batch that large computes a more precise gradient
-  than early training can use, which is why GPT-3 ramps batch size from 32K to 0.5M
-  rather than starting there. Not perfectly controlled — the first run's cosine
-  schedule had already bottomed out at step 280.
+![ablation](figures/ablation.png)
+
+- **RoPE was the largest single change** (-0.261): position stops being a learned row
+  per index and becomes a rotation whose dot product depends only on the distance
+  between two tokens.
+- **SwiGLU replicated on two seeds** (-0.104, -0.125) at matched parameters.
+- **RMSNorm and GQA are trades, not wins.** Both cost ~0.011, inside two noise floors,
+  and buy 1.0% and 5.7% throughput; GQA also cuts the KV cache from 36KB to 12KB per
+  token and 9.4M parameters.
+- **QK-norm measured clearly worse** (+0.077, nine noise floors) at a fixed learning
+  rate. Its purpose is to make a *larger* learning rate usable, which this sweep never
+  varied, so the honest conclusion is "not useful under these conditions", not "not
+  useful". It is the one component left out of the final configuration.
+- **Muon dominated everything at 500M** (-0.580 at its best of three learning rates)
+  and then absorbed the architecture entirely: all four structural changes together
+  added 0.005 on top of it, which is inside the noise floor, on both seeds.
+
+**And then the whole ranking shrank.** The same configuration that was 0.585 nats ahead
+at 500M tokens is 0.035 ahead at 10B — 94% of the apparent gain was the training
+budget, not the architecture. At 954 steps the model is nowhere near its capacity, so
+everything that accelerates optimisation looks enormous; over 19,073 steps AdamW has
+the steps to catch up and only the structural advantage survives. Predicting that
+shrinkage in advance (I guessed 0.15-0.35) was off by an order of magnitude.
+
+What does survive is worth stating precisely: -0.035 nats is still four noise floors,
+HellaSwag improves by 0.0128 (about 2.8 sigma, a larger effect than the loss), and the
+model is 8% smaller, 2.6% faster, and needs a third of the KV cache. At equal quality
+that is a straightforwardly cheaper model to serve.
+
+The lesson generalises past this project: **an ablation run at a fraction of the target
+budget measures optimisation speed, and reports it as if it were quality.** A table of
+500M-token results would have justified a paragraph about Muon being worth 0.58 nats.
+It is worth 0.03.
+
+### Beyond the lecture, elsewhere in this chapter
+
+- **Update count, not token count, was the binding constraint early on.** At equal
+  tokens (147M), the lecture's 2^19-token batch reaches 6.00 val loss in 280 updates
+  where a 2^16 batch reaches ~4.15 in ~2,240. The gradient noise scale explains it:
+  measured across the 10B run it rises from ~10^3 to 622K tokens, crossing the 2^19
+  batch size only near the end. The batch was not wrong, it was early — which is what
+  GPT-3's batch-size ramp is for. It costs one extra gradient norm every ten steps,
+  both of which the training step already computes.
 - **An 8GB card turns "out of memory" into a silent 5x slowdown.** Under WSL2 the
-  driver pages VRAM into host RAM instead of raising, so the only symptom is that
-  everything gets slow. `torch.cuda.set_per_process_memory_fraction` brings the
-  exception back. It caps *per process*, though: two runs launched by accident each
-  stayed under the cap while together exceeding the card, and one overnight run took
-  10 hours instead of 2. The script now takes an `flock` so a second run refuses to
-  start.
-- **The measurement was wrong before the model was.** `val_loss_steps=20` is sized for
-  the lecture's B=64; at B=4 it scores only 82K tokens, and the opening of the val
-  shard is easier than its average — the training-time number read 3.5023 where the
-  same checkpoint scores 3.5475 over 1.31M tokens. Per-batch loss has a standard
-  deviation of 0.227 (min 2.53, max 4.36), so 20 batches leave a ±0.21 swing, 80
-  leave ±0.09. Trends within a run stay valid because every eval uses the same slice;
-  the absolute number is only comparable when the slice matches.
-- **HellaSwag dips below chance before rising above it.** 0.2474 at init, 0.2368 at
-  step 500, back over 0.25 near step 1500 (val loss ~4.4), 0.2634 at the end. The
-  distractors were chosen by adversarial filtering to be what language models find
-  plausible, so a model that knows token frequencies and little else is actively
-  misled. The metric only starts working once the model has more than that.
-- **Weight tying makes a naive init check pass for the wrong reason.** With
-  `wte.weight is lm_head.weight` the residual stream carries `wte[idx]` and
-  `logits = x @ wte.T` peaks at the input token itself, so scoring `targets = inputs`
-  at init gives 4.45 against `ln 128 = 4.85` on a toy config. Untying restores 4.85.
-  Both are asserted in `test_gpt2.py`.
-- **HellaSwag's upstream data is gone.** `rowanz/hellaswag` was DMCA-blocked on
-  2026-09-14 (HTTP 451); `hellaswag.py` now builds the same jsonl from the
-  `Rowan/hellaswag` dataset on HuggingFace, and `download_file` checks the HTTP status
-  so a 404 page can never be saved as if it were data again.
+  driver pages VRAM into host RAM rather than raising.
+  `torch.cuda.set_per_process_memory_fraction` brings the exception back — per process,
+  so two concurrent runs each stayed under the cap while together exceeding the card.
+- **The measurement was wrong before the model was.** `val_loss_steps` was sized for
+  the lecture's B=64; at B=4 it scored 82K tokens instead of the intended 10.5M and
+  read 0.045 nats low, because the val shard opens easier than it averages. The eval
+  slice is specified in tokens now. At 1.31M tokens and above the bias is gone: the
+  10B checkpoint scores 3.0778 on 1.31M and 3.0779 on 10.5M.
+- **torch.compile silently disabled both evals.** `(not use_compile)` skipped HellaSwag
+  and sampling whenever compile was on, with no error and no log line. Compile
+  specialises on input shape and both evals change shape every call, so they run
+  through `raw_model._orig_mod`, the uncompiled view sharing the same parameters.
+  Worth 1.21x on the 4060 and ~40% of the rented-GPU budget it would have cost.
+- **A resume that looks right and is not.** The checkpoint is written in the eval block
+  at the *start* of a step, so `step: S` means "about to run S"; resuming at S+1
+  silently drops one optimizer update and replays its batch. And `--resume auto` is
+  scoped to the run tag, because every ablation wrote a final checkpoint with identical
+  batch geometry — an unattended restart would otherwise have continued a 954-step
+  ablation as a 19,073-step run.
 
-Tests assert that Flash Attention matches the explicit `(B, nh, T, T)` implementation
-it replaced, that attention cannot see the future, that the tied embedding is one
-tensor and not two, that the residual projections get the scaled initialisation while
-other layers do not, that the learning-rate schedule hits its peak exactly at the end
-of warmup and its floor after `max_steps`, and that HellaSwag scoring ignores the
-context region entirely.
+### Tests
+
+144 tests across the chapter, all of them about behaviour rather than shapes. The ones
+worth reading: Flash Attention against the explicit `(B, nh, T, T)` implementation it
+replaced; RoPE's dot product depending only on the distance between positions; GQA's
+`repeat_interleave` mapping (swap it for `repeat` and the model still trains, just with
+every head paired to the wrong K/V); Newton-Schulz pulling singular values to one, and
+the condition number where five iterations stop being enough; weight tying making the
+initial loss *beat* `ln(vocab)` if the test scores `targets = inputs`.
 
 ### Running it
 
 ```bash
 cd 09_gpt2
-python gpt2_follow.py                 # ~9h on an RTX 4060 8GB; refuses to start twice
-python plot_log.py                    # -> log/run_*/curves.png
-python eval_gpt2_baseline.py gpt2     # OpenAI's checkpoint, same eval code
-python eval_gpt2_baseline.py log/run_*/model_09999.pt
+python prep_shards.py --shards 2                      # or all 100 for the 10B run
+python gpt2_follow.py --preset 4060                   # ~9h on an RTX 4060 8GB
+torchrun --standalone --nproc_per_node=2 gpt2_follow.py --preset 4090x2     --pos rope --mlp swiglu --norm rmsnorm --n-kv-head 4 --optimizer muon --muon-lr 0.02
+python ablation_table.py --steps 954                  # collect every run into one table
+python ablation_figure.py
+python eval_gpt2_baseline.py gpt2                     # OpenAI's checkpoint, same eval code
 ```
 
-Each run writes to its own `log/run_YYYYmmdd_HHMMSS/`, with a copy of the script that
-produced it. Data is not in the repo: FineWeb-Edu shards come from
-`build-nanogpt/fineweb.py` (~10B tokens, 99 shards, tracked via `data_root` in
-`gpt2_follow.py`), and HellaSwag downloads on first use.
+`--preset {4060,a800,4090x2,smoke}` holds everything that is a property of the machine
+rather than the recipe, so moving to rented hardware is a flag. Each run writes its own
+`log/run_YYYYmmdd_HHMMSS_tag/` with a copy of the script that produced it.
 
-**Presets, not edits.** `--preset {4060,a800,smoke}` holds the per-machine settings
-(batch, micro-batch, schedule, compile, allocator cap) so moving to rented hardware is
-a flag, not six edits in the source. The eval slice is specified in *tokens*
-(`val_tokens`), not steps, because the same step count scores a different amount of
-data on every machine — which is exactly how the 2h run's val loss came out 0.045 low.
-A test asserts the `a800` preset is the original recipe (2^19, B=64, warmup 715,
-19073 steps) and carries none of the 4060's workarounds.
+Known limitations: the 10B runs used one seed each, so the -0.035 rests on a noise floor
+measured at 500M; Muon's learning rate was tuned at 954 steps and applied at 19,073;
+and the architecture-only 10B run that would separate Muon's contribution from the
+architecture's is still pending.
 
-**`torch.compile` is on for the rented preset, and evaluation survives it.** The old
-code skipped HellaSwag and sampling entirely whenever compile was on — silently, via
-`(not use_compile)`. Compile specialises on input shape, and both of those change
-shape constantly (a different T per HellaSwag example, T+1 per generated token), so
-they now run through `raw_model._orig_mod`, the uncompiled view that shares the same
-parameters; val loss keeps its fixed shape and stays compiled. Measured on the 4060,
-50 steps: **22,500 tok/s uncompiled vs 27,150 compiled (1.21x)**, losses agreeing to
-four decimals, with HellaSwag and samples produced in both. A source-level test
-asserts the `not use_compile` gate never comes back — a whole evaluation being skipped
-raises nothing and so cannot be caught behaviourally.
-
-**Checkpoints resume.** A rented box dying at hour 7 should cost one interval, not the
-night, so a checkpoint carries the optimiser state (AdamW's two moments — dropping
-them means re-warming up), the data loader's shard and position, the RNG state and the
-noise-scale EMA, and `--resume auto` picks up the newest one and appends to that run's
-directory. Two land mines here, both found by testing rather than reasoning: the
-checkpoint is written in the eval block at the *start* of a step, so `step: S` means
-"about to run S" and resuming must re-run it — `+1` silently drops an optimizer step
-and replays its data. And the config is stored as a dict, not the dataclass, because
-pickling the object makes the checkpoint loadable only where `GPTConfig` is importable.
-Verified by killing a run at step 25 and resuming: losses match the uninterrupted run
-to 1e-4, which is this GPU's own nondeterminism.
-
-**Gradient noise scale, measured.** The 2^16-vs-2^19 result above is two points; this
-turns it into a curve. B_simple (McCandlish et al.) is the batch size at which the
-gradient's noise and its signal are the same magnitude — below it a batch is mostly
-noise, above it the extra tokens re-confirm a direction already known. It needs two
-gradient norms at different batch sizes, and both are already lying around: the
-accumulated one is what `clip_grad_norm_` returns, and the single-micro-batch one costs
-one extra norm every `noise_every` steps. No extra forward or backward. Plotting it
-against the two batch sizes shows directly where 2^19 stops being wasteful.
-
-Known limitations: the DDP path is written but untested, as this is a one-GPU
-machine — the first rented hour goes to running 1 vs 2 processes at the same seed and
-checking the loss curves land on top of each other.
-
-Reference implementation is `build-nanogpt/` (a local clone, not tracked here) whose
-44 commits are the video's timeline — `git diff` between two of them is faster than
-scrubbing the recording.
-
-Numbering follows the lecture series, so 08 stays reserved for the tokenizer lecture,
-which has not been done.
-
-See [`experiments/bpc.md`](experiments/bpc.md).
+See [`experiments/bpc.md`](experiments/bpc.md) and
+[`experiments/ablation_results.json`](experiments/ablation_results.json).

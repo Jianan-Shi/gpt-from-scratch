@@ -1,0 +1,26 @@
+{
+ "_note": "Measured on 2x RTX 4090. 1B rows are 954 steps (500M tokens) at total_batch_size 2**19; 10B rows are 19073 steps. val is the training-time slice (10.5M tokens) except where val_1p31M is given, which is eval_gpt2_baseline.py on the same 1.31M tokens OpenAI's checkpoint was scored on. Throughput marked stale_tps was read from a per-tag stdout log before those streams moved into log.txt.",
+ "noise_floor_500M": 0.0088,
+ "runs_500M": [
+  {"tag": "base_s1337", "val": 4.2561, "hella": 0.2528, "tps": 129355, "params": 124475904, "kv_kb": 36, "seed": 1337, "arch": {}},
+  {"tag": "base_s2024", "val": 4.2473, "hella": 0.2534, "tps": 129345, "params": 124475904, "kv_kb": 36, "seed": 2024, "arch": {}},
+  {"tag": "rope", "val": 3.9950, "hella": 0.2529, "tps": 127330, "params": 123689472, "kv_kb": 36, "seed": 1337, "arch": {"pos": "rope"}},
+  {"tag": "swiglu", "val": 4.1519, "hella": 0.2491, "tps": 127501, "params": 124488192, "kv_kb": 36, "seed": 1337, "arch": {"mlp": "swiglu"}},
+  {"tag": "swiglu_s2024", "val": 4.1228, "hella": 0.2491, "tps": 127439, "params": 124488192, "kv_kb": 36, "seed": 2024, "arch": {"mlp": "swiglu"}},
+  {"tag": "rmsnorm", "val": 4.2670, "hella": 0.2502, "tps": 130612, "params": 124456704, "kv_kb": 36, "seed": 1337, "arch": {"norm": "rmsnorm"}},
+  {"tag": "gqa4", "val": 4.2672, "hella": 0.2527, "tps": 136791, "params": 115026432, "kv_kb": 12, "seed": 1337, "arch": {"n_kv_head": 4}},
+  {"tag": "qknorm", "val": 4.3327, "hella": 0.2497, "tps": 124912, "params": 124477440, "kv_kb": 36, "seed": 1337, "arch": {"qk_norm": true}},
+  {"tag": "combined", "val": 3.9561, "hella": 0.2522, "tps": 134610, "params": 114200000, "kv_kb": 12, "seed": 1337, "arch": {"pos": "rope", "mlp": "swiglu", "norm": "rmsnorm", "n_kv_head": 4}},
+  {"tag": "muon_lr01", "val": 3.7059, "hella": 0.2602, "tps": 128919, "params": 124475904, "kv_kb": 36, "seed": 1337, "arch": {"optimizer": "muon", "muon_lr": 0.01}},
+  {"tag": "muon_lr02", "val": 3.6759, "hella": 0.2582, "tps": 128641, "params": 124475904, "kv_kb": 36, "seed": 1337, "arch": {"optimizer": "muon", "muon_lr": 0.02}},
+  {"tag": "muon_lr04", "val": 3.7191, "hella": 0.2545, "tps": 128666, "params": 124475904, "kv_kb": 36, "seed": 1337, "arch": {"optimizer": "muon", "muon_lr": 0.04}},
+  {"tag": "combined_muon", "val": 3.6713, "hella": 0.2590, "tps": 133862, "params": 114200000, "kv_kb": 12, "seed": 1337, "arch": {"pos": "rope", "mlp": "swiglu", "norm": "rmsnorm", "n_kv_head": 4, "optimizer": "muon", "muon_lr": 0.02}},
+  {"tag": "combined_muon_s2024", "val": 3.6663, "hella": 0.2580, "tps": 133824, "params": 114200000, "kv_kb": 12, "seed": 2024, "arch": {"pos": "rope", "mlp": "swiglu", "norm": "rmsnorm", "n_kv_head": 4, "optimizer": "muon", "muon_lr": 0.02}}
+ ],
+ "runs_10B": [
+  {"tag": "gpt2_openai", "val_1p31M": 3.2799, "hella": 0.2976, "params": 124475904, "kv_kb": 36, "note": "OpenAI's released checkpoint, measured here by eval_gpt2_baseline.py"},
+  {"tag": "base10b", "val": 3.0779, "val_1p31M": 3.0778, "hella": 0.3012, "tps": 250193, "params": 124475904, "kv_kb": 36, "arch": {}},
+  {"tag": "modern10b", "val": 3.0410, "val_1p31M": 3.0429, "hella": 0.3140, "tps": 256650, "params": 114200000, "kv_kb": 12, "arch": {"pos": "rope", "mlp": "swiglu", "norm": "rmsnorm", "n_kv_head": 4, "optimizer": "muon", "muon_lr": 0.02}},
+  {"tag": "arch10b", "val": null, "hella": null, "tps": 260213, "params": 114200000, "kv_kb": 12, "arch": {"pos": "rope", "mlp": "swiglu", "norm": "rmsnorm", "n_kv_head": 4}, "note": "running: separates the architecture's contribution from Muon's"}
+ ]
+}

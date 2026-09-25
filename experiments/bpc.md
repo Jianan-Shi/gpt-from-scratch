@@ -276,6 +276,78 @@ to 0.09, 320 batches to about 0.05.
   `logits = x @ wte.T` peaks at the input token itself. Scoring `targets = inputs` at
   init gives 4.45 against `ln 128 = 4.85` on a toy config; untying restores 4.85.
 
+## 09b — Modern components, ablated
+
+Same recipe as the 10B baseline at 1/20 of the budget: 954 steps, 500M tokens,
+total_batch_size 2^19, one change per run, seed 1337 unless stated. Two baseline seeds
+put the noise floor at **0.0088** — a difference smaller than that is not a result.
+
+| variant | val loss | vs baseline | tok/s | params | KV/token |
+|---|---|---|---|---|---|
+| baseline (GPT-2 recipe), seed 1337 | 4.2561 | — | 129,355 | 124.5M | 36KB |
+| baseline, seed 2024 | 4.2473 | — | 129,345 | 124.5M | 36KB |
+| + RoPE | 3.9950 | -0.2611 | 127,330 | 123.7M | 36KB |
+| + SwiGLU | 4.1519 | -0.1042 | 127,501 | 124.5M | 36KB |
+| + SwiGLU, seed 2024 | 4.1228 | -0.1245 | 127,439 | 124.5M | 36KB |
+| + RMSNorm | 4.2670 | +0.0109 | 130,612 | 124.5M | 36KB |
+| + GQA (4 KV heads) | 4.2672 | +0.0111 | 136,791 | 115.0M | 12KB |
+| + QK-norm | 4.3327 | +0.0766 | 124,912 | 124.5M | 36KB |
+| + all four structural | 3.9561 | -0.3000 | 134,610 | 114.2M | 12KB |
+| + Muon (lr 0.01) | 3.7059 | -0.5502 | 128,919 | 124.5M | 36KB |
+| + Muon (lr 0.02) | 3.6759 | -0.5802 | 128,641 | 124.5M | 36KB |
+| + Muon (lr 0.04) | 3.7191 | -0.5370 | 128,666 | 124.5M | 36KB |
+| + all four + Muon | 3.6713 | -0.5848 | 133,862 | 114.2M | 12KB |
+| + all four + Muon, seed 2024 | 3.6663 | -0.5810 | 133,824 | 114.2M | 12KB |
+
+### The 10B runs
+
+| | val loss (1.31M tokens) | HellaSwag | params | KV/token | tok/s |
+|---|---|---|---|---|---|
+| OpenAI GPT-2 124M | 3.2799 | 0.2976 | 124.5M | 36KB | — |
+| baseline, 10B tokens | 3.0778 | 0.3012 | 124.5M | 36KB | 250,193 |
+| all four + Muon, 10B tokens | **3.0429** | **0.3140** | 114.2M | 12KB | 256,650 |
+
+### Findings — ablation
+
+- **The budget produced most of the apparent gain.** The configuration that was
+  **-0.585** ahead at 500M tokens is **-0.035** ahead at 10B: a 94% shrinkage. At 954
+  steps the model is far from its capacity, so anything that speeds up optimisation
+  looks large; at 19,073 steps AdamW catches up and only the structural advantage is
+  left. An ablation run at a small fraction of the target budget measures optimisation
+  speed and reports it as quality.
+- **Muon absorbed the architecture at 500M.** Alone it was -0.580; the four structural
+  changes added 0.005 on top of it (0.010 on the second seed), both inside the noise
+  floor, despite being worth -0.300 on their own. Three interventions, one bottleneck.
+- **RoPE was the largest single component** (-0.261), more than twice SwiGLU (-0.104,
+  replicated at -0.125), and it removes the 786,432-parameter position table.
+- **Two components are trades rather than wins.** RMSNorm and GQA each cost ~0.011 —
+  just above one noise floor — and return 1.0% and 5.7% throughput; GQA also cuts the
+  KV cache by 67% and 9.4M parameters.
+- **QK-norm was the one negative result** (+0.077, nine noise floors). It exists to
+  make a larger learning rate usable and the sweep held the learning rate fixed, so
+  what was measured is the cost without the benefit. Excluded from the final config.
+- **Muon's learning rate has a clean optimum** at 0.02 (0.01 -> +0.030, 0.04 -> +0.043)
+  and it is thirty times AdamW's. Running Muon at AdamW's 6e-4 is the standard way to
+  conclude that Muon does not work.
+- **What survives at 10B**: -0.035 nats (four noise floors), HellaSwag +0.0128 (~2.8
+  sigma, a larger effect than the loss), 8% fewer parameters, 2.6% more throughput,
+  one third of the KV cache.
+
+### Findings — gradient noise scale
+
+Measured throughout both 10B runs, from two gradient norms the training step already
+computes (one micro batch, and the accumulated batch that `clip_grad_norm_` returns):
+
+| | start | end of 10B |
+|---|---|---|
+| baseline | ~10^3 tokens | 622K tokens |
+| all four + Muon | 9.3K tokens | 344K tokens |
+
+The batch size in use is 524,288 tokens. The noise scale only reaches it near the end
+of training, so for most of the run the batch was larger than the gradient's noise
+justified — which is what GPT-3's ramp from 32K to 0.5M addresses, and why the 2^16
+batch beat the 2^19 one at equal tokens early on.
+
 ## Reproducibility
 
 - torch 2.6.0+cu124, Python 3.11.15
