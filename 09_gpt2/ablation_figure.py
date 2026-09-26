@@ -31,8 +31,8 @@ rows = [
     ("all four + Muon", "combined_muon", ORANGE),
 ]
 
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.5, 5.2),
-                               gridspec_kw={"width_ratios": [1.45, 1]})
+fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 5.2),
+                                    gridspec_kw={"width_ratios": [1.5, 1, 1]})
 
 # ---------------------------------------------------------------- 左图
 deltas = [runs[tag]["val"] - base for _, tag, _ in rows]
@@ -71,6 +71,29 @@ ax2.set_ylabel("change in val loss vs baseline (nats)")
 ax2.set_title("The same configuration, two budgets", fontsize=12)
 ax2.grid(alpha=0.25, axis="y", linewidth=0.6)
 ax2.set_axisbelow(True)
+
+# ---------------------------------------------------------------- 右图：10B 上的拆分
+if ten["arch10b"]["val_1p31M"]:
+    b = ten["base10b"]["val_1p31M"]
+    steps = [("GPT-2\nbaseline", b, GREY),
+             ("+ architecture\n(AdamW)", ten["arch10b"]["val_1p31M"], BLUE),
+             ("+ Muon", ten["modern10b"]["val_1p31M"], ORANGE)]
+    xs = range(len(steps))
+    ax3.plot(xs, [v for _, v, _ in steps], color="#bbbbbb", linewidth=2, zorder=1)
+    ax3.scatter(xs, [v for _, v, _ in steps], s=110, color=[c for _, _, c in steps], zorder=3)
+    for x, (_, v, _) in zip(xs, steps):
+        ax3.annotate(f"{v:.4f}", (x, v), textcoords="offset points", xytext=(0, 12),
+                     ha="center", fontsize=10)
+    for x in (0, 1): # 每一段的增量
+        d0, d1 = steps[x][1], steps[x + 1][1]
+        ax3.annotate(f"{d1 - d0:+.4f}", (x + 0.5, (d0 + d1) / 2), textcoords="offset points",
+                     xytext=(6, 4), fontsize=10, color="#444444")
+    ax3.set_xticks(list(xs), [label for label, _, _ in steps], fontsize=9.5)
+    ax3.set_xlim(-0.4, len(steps) - 0.5)
+    ax3.set_ylabel("val loss on 1.31M tokens (nats)")
+    ax3.set_title("Where the 10B gain comes from\n(the two halves are nearly equal)", fontsize=12)
+    ax3.grid(alpha=0.25, axis="y", linewidth=0.6)
+    ax3.set_axisbelow(True)
 
 fig.tight_layout()
 out = ROOT / "figures" / "ablation.png"

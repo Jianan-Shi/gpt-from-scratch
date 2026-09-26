@@ -16,7 +16,8 @@ numbers stay comparable across chapters.
 | 07 | 6-layer Transformer, tiny Shakespeare | 10.8M | 2.1597 bpc (best) | own corpus, 6.022 uniform |
 | 08 | BPE tokenizer from scratch | — | 3.21 bytes/token @ vocab 1536 | 1.0, raw bytes |
 | 09 | GPT-2 124M reproduction, 10B tokens on 2x RTX 4090 | 124M | **3.0778 nats/token**, HellaSwag **0.3012** | 3.2799 / 0.2976 — OpenAI's checkpoint, measured here |
-| 09 | + RoPE, SwiGLU, RMSNorm, GQA, Muon | 114M | **3.0429**, HellaSwag **0.3140** | 3.0778 / 0.3012 — the baseline above |
+| 09 | + RoPE, SwiGLU, RMSNorm, GQA (AdamW) | 114M | 3.0614, HellaSwag 0.3113 | 3.0778 / 0.3012 — the baseline above |
+| 09 | + Muon on top of those | 114M | **3.0429**, HellaSwag **0.3140** | 3.0778 / 0.3012 — the baseline above |
 
 Chapters 02–05 are character-level on names, scored in bits per character against a
 shared split. Chapter 09 is a different corpus, tokenizer and unit; it is scored against
@@ -347,7 +348,8 @@ OpenAI's checkpoint, so the comparisons are controlled rather than quoted.
 |---|---|---|---|---|---|
 | OpenAI GPT-2 124M | 3.2799 | 0.2976 | 124.5M | 36KB/token | — |
 | this repo, 10B tokens | 3.0778 | 0.3012 | 124.5M | 36KB/token | 250K |
-| **+ RoPE, SwiGLU, RMSNorm, GQA, Muon** | **3.0429** | **0.3140** | **114.2M** | **12KB/token** | **257K** |
+| + RoPE, SwiGLU, RMSNorm, GQA | 3.0614 | 0.3113 | 114.2M | 12KB/token | 260K |
+| **+ Muon on top of those** | **3.0429** | **0.3140** | **114.2M** | **12KB/token** | **257K** |
 
 Both runs beat the released checkpoint on 10% of its training tokens, which is the
 lecture's own result and comes from FineWeb-Edu being better data than WebText.
@@ -374,6 +376,15 @@ with a seed-noise floor of 0.0088 established from two baseline seeds.
 - **Muon dominated everything at 500M** (-0.580 at its best of three learning rates)
   and then absorbed the architecture entirely: all four structural changes together
   added 0.005 on top of it, which is inside the noise floor, on both seeds.
+
+**The two halves are equal at 10B, and were not at 500M.** A third 10B run with the
+architecture but plain AdamW splits the gain down the middle: the architecture is worth
+-0.0164 and Muon adds a further -0.0185 on top of it. At 500M the same decomposition
+ran -0.300 then -0.285 in that order, but the *other* order gave -0.580 for Muon and
+then -0.005 for the architecture — a sixty-fold difference depending on which was
+applied first, which is the interaction. At 10B only one of the two orders was run
+(the fourth cell, GPT-2 architecture with Muon, was not), so the size of the
+interaction there is unmeasured; what is measured is that neither component dominates.
 
 **And then the whole ranking shrank.** The same configuration that was 0.585 nats ahead
 at 500M tokens is 0.035 ahead at 10B — 94% of the apparent gain was the training
@@ -448,10 +459,17 @@ python eval_gpt2_baseline.py gpt2                     # OpenAI's checkpoint, sam
 rather than the recipe, so moving to rented hardware is a flag. Each run writes its own
 `log/run_YYYYmmdd_HHMMSS_tag/` with a copy of the script that produced it.
 
-Known limitations: the 10B runs used one seed each, so the -0.035 rests on a noise floor
+One more observation without an explanation: the gradient noise scale at the end of
+training differs sharply by configuration — 622K tokens for the baseline, **957K** for
+the architecture on AdamW, **344K** with Muon. B_simple is computed from the loss
+gradients and does not know which optimizer is in use, so this is the optimizer moving
+the model into a region with different gradient statistics, not an artefact of the
+measurement. Worth noting, not yet worth a claim.
+
+Known limitations: the 10B runs used one seed each, so -0.035 rests on a noise floor
 measured at 500M; Muon's learning rate was tuned at 954 steps and applied at 19,073;
-and the architecture-only 10B run that would separate Muon's contribution from the
-architecture's is still pending.
+and the fourth cell of the 2x2 (GPT-2 architecture with Muon at 10B) was not run, so
+the interaction at full budget is unquantified.
 
 See [`experiments/bpc.md`](experiments/bpc.md) and
 [`experiments/ablation_results.json`](experiments/ablation_results.json).

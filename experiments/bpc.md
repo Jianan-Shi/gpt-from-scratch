@@ -305,7 +305,19 @@ put the noise floor at **0.0088** — a difference smaller than that is not a re
 |---|---|---|---|---|---|
 | OpenAI GPT-2 124M | 3.2799 | 0.2976 | 124.5M | 36KB | — |
 | baseline, 10B tokens | 3.0778 | 0.3012 | 124.5M | 36KB | 250,193 |
+| all four (AdamW), 10B tokens | 3.0614 | 0.3113 | 114.2M | 12KB | 259,634 |
 | all four + Muon, 10B tokens | **3.0429** | **0.3140** | 114.2M | 12KB | 256,650 |
+
+Decomposition of the -0.0349 at 10B, along the one path that was run:
+
+| step | val loss | delta |
+|---|---|---|
+| GPT-2 baseline | 3.0778 | — |
+| + RoPE, SwiGLU, RMSNorm, GQA | 3.0614 | **-0.0164** |
+| + Muon | 3.0429 | **-0.0185** |
+
+The fourth cell (GPT-2 architecture + Muon at 10B) was not run, so the interaction at
+this budget is unmeasured; at 500M it was severe, see below.
 
 ### Findings — ablation
 
@@ -315,9 +327,13 @@ put the noise floor at **0.0088** — a difference smaller than that is not a re
   looks large; at 19,073 steps AdamW catches up and only the structural advantage is
   left. An ablation run at a small fraction of the target budget measures optimisation
   speed and reports it as quality.
-- **Muon absorbed the architecture at 500M.** Alone it was -0.580; the four structural
-  changes added 0.005 on top of it (0.010 on the second seed), both inside the noise
-  floor, despite being worth -0.300 on their own. Three interventions, one bottleneck.
+- **Muon absorbed the architecture at 500M, and stopped doing so at 10B.** At 500M,
+  Muon alone was -0.580 and the four structural changes added 0.005 on top of it (0.010
+  on the second seed), both inside the noise floor, despite being worth -0.300 alone.
+  At 10B the architecture is worth -0.0164 and Muon adds -0.0185 on top of it: neither
+  dominates. The order-dependence at 500M (-0.300 then -0.285 one way, -0.580 then
+  -0.005 the other) is the interaction, and it is what a short budget gets wrong on top
+  of the magnitudes.
 - **RoPE was the largest single component** (-0.261), more than twice SwiGLU (-0.104,
   replicated at -0.125), and it removes the 786,432-parameter position table.
 - **Two components are trades rather than wins.** RMSNorm and GQA each cost ~0.011 —
@@ -341,6 +357,7 @@ computes (one micro batch, and the accumulated batch that `clip_grad_norm_` retu
 | | start | end of 10B |
 |---|---|---|
 | baseline | ~10^3 tokens | 622K tokens |
+| all four, AdamW | 9.3K tokens | 957K tokens |
 | all four + Muon | 9.3K tokens | 344K tokens |
 
 The batch size in use is 524,288 tokens. The noise scale only reaches it near the end
